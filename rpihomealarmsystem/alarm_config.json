@@ -1,0 +1,45 @@
+{
+    "arming grace delay":60,
+    "disarming grace delay":30,
+    "google_password":"googlepassword",
+    "google_username":"yourgmail@gmail.com",
+    "pin":"1234",
+    "button_wav":"sounds/button.wav",
+    "alarm_wav":"sounds/siren.wav",
+    "grace_beeps":"sounds/grace_beeps.wav",
+    "grace_beeps3":"sounds/grace_beeps3.wav",
+    "sensor_map":{
+        "22":[
+            "DOOR",
+            41,
+			"PULLUP"
+        ],
+        "17":[
+            "PATIO",
+            42,
+			"PULLUP"
+        ],
+        "23":[
+            "MS1",
+            44,
+			"FLOATING"
+        ],
+        "4":[
+            "GARAGE",
+            43,
+			"PULLUP"
+        ],
+        "24":[
+            "MS2",
+            45,
+			"FLOATING"
+        ],
+        "25":[
+            "MS3",
+            46,
+			"FLOATING"
+        ]
+    },
+    "wunderground location":"CYGK",
+	"wunderground api key":"get_your_own_free_wunderground_api_key"
+}
