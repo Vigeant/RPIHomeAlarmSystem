@@ -268,7 +268,7 @@ class Alarm_controller():
 
 		#create View  (MVC pattern)
 		Alarm_view(alarm_config_dictionary,self.model)
-		Sound_player(alarm_config_dictionary,script_path) #testing the fucking bug where it stops working after some time when playing a sound
+		Sound_player(alarm_config_dictionary,script_path)
 		
 		#create scanners (threads that periodically poll things)
 		Keypad_scanner()
