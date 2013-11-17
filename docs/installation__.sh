@@ -41,6 +41,10 @@ sudo apt-get install python-rpi.gpio python3-rpi.gpio #replaced by RPIO in auto 
 sudo apt-get install python-pip #implicit
 ##then use it to install PyDisapatcher
 sudo pip install PyDispatcher # added to auto setup
+##and to install RPYC
+sudo pip install rpyc
+
+
 
 ##install alsa for wav playback
 sudo apt-get install alsa-utils 
