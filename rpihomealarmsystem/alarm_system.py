@@ -120,7 +120,7 @@ class WeatherScanner(Thread):
 					
 					location = parsed_json_weather['location']['city']
 					wind_dir = parsed_json_weather['current_observation']['wind_degrees']
-					wind_kph = parsed_json_weather['current_observation']['wind_kph']
+					wind_kph = parsed_json_weather['current_observation']['wind_mph']*1.61
 					temp = parsed_json_weather['current_observation']['feelslike_c']
 				
 					msg = [temp,wind_dir,wind_kph]
