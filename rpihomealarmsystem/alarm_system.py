@@ -83,12 +83,15 @@ class Weather_scanner(Thread):
 			except ValueError:
 				print(sys.exc_info())
 				
-			location = parsed_json_weather['location']['city']
-			wind_dir = parsed_json_weather['current_observation']['wind_degrees']
-			wind_kph = parsed_json_weather['current_observation']['wind_kph']
-			temp = parsed_json_weather['current_observation']['feelslike_c']
-			msg = [temp,wind_dir,wind_kph]
-			eventQ.put([dispatcher.send,{"signal":"Weather Update", "sender":dispatcher.Any,"msg":msg }])
+			try:
+				location = parsed_json_weather['location']['city']
+				wind_dir = parsed_json_weather['current_observation']['wind_degrees']
+				wind_kph = parsed_json_weather['current_observation']['wind_kph']
+				temp = parsed_json_weather['current_observation']['feelslike_c']
+				msg = [temp,wind_dir,wind_kph]
+				eventQ.put([dispatcher.send,{"signal":"Weather Update", "sender":dispatcher.Any,"msg":msg }])
+			except:
+				print(sys.exc_info())
 			time.sleep(300) 
 
 
