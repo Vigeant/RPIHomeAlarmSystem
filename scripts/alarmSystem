@@ -23,24 +23,24 @@ statusfunction(){
 }
 
 starting(){
-    #echo "synching /home/pi/Python directory with latest version from dropbox"
-	#mount -a
-	#rsync -av --delete /mnt/dropbox/Workspace/RPIHomeAlarmSystem /home/pi/Python
+    echo "synching /home/pi/ directory with latest version from dropbox"
+	mount -a
+	rsync -av --delete /mnt/dropbox/Workspace/RPIHomeAlarmSystem /home/pi/
 	
-	#if [ -e /mnt/dropbox/Workspace/alarm_config.json ]; then
-	#	rsync -av --delete /mnt/dropbox/Workspace/alarm_config.json /home/pi/alarm_config.json
-	#fi
+	if [ -e /mnt/dropbox/Workspace/alarm_config.json ]; then
+		rsync -av --delete /mnt/dropbox/Workspace/alarm_config.json /home/pi/alarm_config.json
+	fi
 
 	echo "verifying if user alarm_config.json exists in user home directory"
-	if [ -e /home/pi/rpihomealarmsystem/alarm_config.json ]; then
+	if [ -e /home/pi/alarm_config.json ]; then
 		echo "user alarm_config.json file was found"
-	#else
-	#	echo "user alarm_config.json file was not found copying template in /home/pi/alarm_config.json"
-	#	cp -v /home/pi/Python/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_config.json /home/pi/
+	else
+		echo "user alarm_config.json file was not found copying template in /home/pi/alarm_config.json"
+		cp -v /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_config_template.json /home/pi/alarm_config.json
 	fi
 	
 	#echo "Updating Pydispatcher thread safe from dropbox version"
-	#/home/pi/Python/Alarm_system_v1.0/PyDispatcher-2.0.1ts/setup.py install
+	#/home/pi/Alarm_system_v1.0/PyDispatcher-2.0.1ts/setup.py install
 	
 	# Check if alarm_system is running
 	if ps aux | grep "[p]ython -u alarm_system"
@@ -48,8 +48,8 @@ starting(){
 		echo "Already running..."
 	else
 		echo "Starting alarmSystem"
-		#python -u /home/pi/Python/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/home/pi/Python/std.log 2>&1 &
-		cd /home/pi/rpihomealarmsystem/ && exec python -u alarm_system.py 1>/dev/null 2>&1 &
+		cd /home/pi/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
+		#cd /home/pi/rpihomealarmsystem/ && exec python -u alarm_system.py 1>/dev/null 2>&1 &
 	fi
 	
 	#statusfunction
@@ -57,13 +57,7 @@ starting(){
 }
 stopping(){
     # kill application you want to stop
-	if ps aux | grep "[p]ython -u alarm_system"
-	then
-		echo "Stopping alarmSystem"
-		pkill -f alarm_system
-	else
-		echo "alarmSystem not running"
-	fi
+	pkill -f alarm_system
 }
 
 case "$1" in

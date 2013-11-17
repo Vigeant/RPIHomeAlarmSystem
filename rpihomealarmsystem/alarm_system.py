@@ -574,9 +574,9 @@ class AlarmController():
 		script_path = os.path.dirname(os.path.abspath(__file__))+"/"
 		logger.info('script_path '+ script_path)
 		try:
-			alarm_config_file = open(script_path + "alarm_config.json",'r')
+			alarm_config_file = open(script_path + "../../alarm_config.json",'r')
 		except:
-			logger.warning("could not open file : "+script_path+"alarm_config.json ...")
+			logger.warning("could not open file : "+script_path+"../../alarm_config.json ...")
 
 		try:
 			alarm_config_dictionary = json.loads(alarm_config_file.read())
