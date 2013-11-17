@@ -1,0 +1,94 @@
+#! /bin/bash
+# /etc/init.d/alarmSystem 
+
+### BEGIN INIT INFO
+# Provides:          alarmSystem
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Simple script to start a program at boot
+# Description:       A simple script from www.stuffaboutcode.com which will start / stop a program a boot / shutdown.
+### END INIT INFO
+
+# If you want a command to always run, put it here
+echo "init.d script"
+# Carry out specific functions when asked to by the system
+statusfunction(){
+	#pkill -SIGUSR1 -f alarm_system
+	#echo $?
+	#cat /home/pi/Python/RPIHomeAlarmSystem/rpihomealarmsystem/ui_file
+	python /home/pi/rpihomealarmsystem/alarm_remote.py -p
+	
+}
+
+starting(){
+    #echo "synching /home/pi/Python directory with latest version from dropbox"
+	#mount -a
+	#rsync -av --delete /mnt/dropbox/Workspace/RPIHomeAlarmSystem /home/pi/Python
+	
+	#if [ -e /mnt/dropbox/Workspace/alarm_config.json ]; then
+	#	rsync -av --delete /mnt/dropbox/Workspace/alarm_config.json /home/pi/alarm_config.json
+	#fi
+
+	echo "verifying if user alarm_config.json exists in user home directory"
+	if [ -e /home/pi/rpihomealarmsystem/alarm_config.json ]; then
+		echo "user alarm_config.json file was found"
+	#else
+	#	echo "user alarm_config.json file was not found copying template in /home/pi/alarm_config.json"
+	#	cp -v /home/pi/Python/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_config.json /home/pi/
+	fi
+	
+	#echo "Updating Pydispatcher thread safe from dropbox version"
+	#/home/pi/Python/Alarm_system_v1.0/PyDispatcher-2.0.1ts/setup.py install
+	
+	# Check if alarm_system is running
+	if ps aux | grep "[p]ython -u alarm_system"
+	then
+		echo "Already running..."
+	else
+		echo "Starting alarmSystem"
+		#python -u /home/pi/Python/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/home/pi/Python/std.log 2>&1 &
+		cd /home/pi/rpihomealarmsystem/ && exec python -u alarm_system.py 1>/dev/null 2>&1 &
+	fi
+	
+	#statusfunction
+
+}
+stopping(){
+    # kill application you want to stop
+	if ps aux | grep "[p]ython -u alarm_system"
+	then
+		echo "Stopping alarmSystem"
+		pkill -f alarm_system
+	else
+		echo "alarmSystem not running"
+	fi
+}
+
+case "$1" in
+  start)
+	starting
+    ;;
+  stop)
+	stopping
+    ;;
+  restart)
+	stopping
+	starting
+    ;;
+  status)
+	statusfunction
+	;;
+  arm)
+	#pkill -SIGUSR2 -f alarm_system
+	python /home/pi/rpihomealarmsystem/alarm_remote.py -s StateArmed
+	statusfunction
+	;;
+  *)
+    echo "Usage: /etc/init.d/alarmSystem {start|stop|restart|status|arm}"
+    exit 1
+    ;;
+esac
+
+exit 0

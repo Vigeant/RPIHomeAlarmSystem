@@ -1,0 +1,15 @@
+#! /bin/bash
+
+case "$1" in
+        update)
+            echo "synching /etc/init.d/alarmSystem and /usr/local/bin/alarSystem script with latest version from dropbox"
+            mount -a
+            rsync -av --delete /mnt/dropbox/Workspace/alarmSystem  /etc/init.d/alarmSystem
+            rsync -av --delete /mnt/dropbox/Workspace/alarmSystem  /usr/local/bin/alarmSystem
+		;;
+		*)
+			echo "usage alarmSystemStartupScriptUpdater update"
+		;;
+esac
+
+exit 0

@@ -1,6 +1,7 @@
 import smbus
 from singletonmixin import Singleton
 from threading import RLock
+from Queue import Queue
 
 """
 This is a library for using the i2c LCD03
@@ -29,8 +30,10 @@ Simon Monk http://www.simonmonk.org
 
 Please give credit where credit is due.
 
+Modified by Yann Moffett to meet common interface requirement with I2CBV4618.
 """
 
+key_buffer = []
 
 class I2CLCD(Singleton):
     """
@@ -43,9 +46,25 @@ class I2CLCD(Singleton):
         self.address = address
         self.bus = smbus.SMBus(1)
         
+        self.BUTTON_RELEASED, self.BUTTON_PRESSED = [False, True]
+        self.key_state = {'1':self.BUTTON_RELEASED,
+                         '2':self.BUTTON_RELEASED,
+                         '3':self.BUTTON_RELEASED,
+                         '4':self.BUTTON_RELEASED,
+                         '5':self.BUTTON_RELEASED,
+                         '6':self.BUTTON_RELEASED,
+                         '7':self.BUTTON_RELEASED,
+                         '8':self.BUTTON_RELEASED,
+                         '9':self.BUTTON_RELEASED,
+                         '0':self.BUTTON_RELEASED,
+                         '*':self.BUTTON_RELEASED,
+                         '#':self.BUTTON_RELEASED}
         
     def init(self):
         self.clr_scrn()
+        self.char_dict = {}
+                
+        """
         self.CLOCK = 128 # clock char  ex.:lcd lcd.print_str(chr(CLOCK))
         self.DEG = 129 # deg symbol
         self.LOCKED = 130 # Locked lock char
@@ -54,6 +73,7 @@ class I2CLCD(Singleton):
         self.CAMERA = 133
         self.PATIO = 134
         self.current_symbol = 'null'
+                
         self.send_cmd([27,self.CLOCK,128,142,149,151,145,142,128,128])#clock chr(128)
         self.send_cmd([27,self.DEG,140,146,146,140,128,128,128,128])#deg chr(129)
         self.send_cmd([27,self.LOCKED,128,142,145,145,159,155,159,128])#locked chr(130)
@@ -61,7 +81,7 @@ class I2CLCD(Singleton):
         self.send_cmd([27,self.DOOR,159,149,159,149,159,159,159,159])#door chr(132)
         self.send_cmd([27,self.CAMERA,159,142,132,142,142,142,142,142])#camera chr(133)
         self.send_cmd([27,self.PATIO,159,145,145,147,147,145,145,159])#patio door chr(134)
-
+        """
     
     def clr_scrn(self):
         self.send_cmd([0x0C])
@@ -78,6 +98,13 @@ class I2CLCD(Singleton):
                 cmd = cmd[endIndex:]
 
     """
+    Sends text to the LCD.
+    """
+    def send(self,data):
+        with self.mutex:
+            for a in range(0,len(data)):
+                self.bus.write_byte(self.adr,data[a])
+    """
     The I2C can send bytes faster than the LCD can process them. Therefore it has a
     64 byte FIFO buffer to receive commands and process them.
     It is good practice to ensure there is room in the buffer
@@ -93,8 +120,7 @@ class I2CLCD(Singleton):
         if on :
             self.send_cmd([0x13])
         else:
-            self.send_cmd([0x14])
-                
+            self.send_cmd([0x14])    
     
     """
     returns an int where each bit represents the state of a key on the keypad.
@@ -106,6 +132,18 @@ class I2CLCD(Singleton):
             temp = self.bus.read_byte_data(self.address, 2)*256 + self.bus.read_byte_data(self.address, 1)
         return temp
 
+    """
+    prints a string on the LCD and makes sure not to overrun the buffer.
+    """
+    def print_str(self,string,row=0,column=0):
+        if (not row==0) and (not column==0):
+            self.move_cursor(row,column)
+        ordinated_str = [ord(i) for i in string]
+        self.send(ordinated_str)
+        
+    def move_cursor(self,row,col):
+        self.send_cmd([2,(row-1)*20+col])
+    
     """
     returns a string containing the characters pressed on the keypad
     """
@@ -119,85 +157,41 @@ class I2CLCD(Singleton):
                 buttons += button_list[i]
             raw = raw>>1
         return buttons
+          
+    def get_key(self):
+        try:
+            self.raw_keypad = self.keypad.get_keypad_buttons()
+        except:
+            pass
+        else:
+                               
+            for key,state in self.key_state.iteritems():
+                if state == self.BUTTON_RELEASED:
+                    
+                    if key in self.raw_keypad:                  #and is read as pressed
+                        self.key_state[key] = self.BUTTON_PRESSED
+                        self.key_buffer.append(key)
+                else:
+                    if not (key in self.raw_keypad):
+                        self.key_state[key] = self.BUTTON_RELEASED
+        
+        if len(key_buffer) == 0:
+            return ''
+        else:
+            return key_buffer.pop(0)            
 
-    """
-    prints a string on the LCD and makes sure not to overrun the buffer.
-    """
-    def print_str(self, s):
-        ordinated_s = [ord(i) for i in s]
-        self.send_cmd(ordinated_s)
+    def change_custom_char(self,num,data,charname=""):
+        with self.lcd_mutex:   
+            if not charname=="":
+                self.char_dict[charname]=num
+            self.send_cmd([27,128+num*8])
+            self.send(data)
 
-    def do_north(self):
-        if not self.current_symbol == 'north':
-            self.send_cmd([27,135,132,142,149,132,132,128,128,128])#arrow chr(135)
-            self.current_symbol = 'north'
-
-    def do_north_east(self):
-        if not self.current_symbol == 'north_east':
-            self.send_cmd([27,135,143,131,133,137,144,128,128,128])#arrow chr(135)
-            self.current_symbol = 'north_east'
-
-    def do_east(self):
-        if not self.current_symbol == 'east':
-            self.send_cmd([27,135,132,130,159,1130,132,128,128,128])#arrow chr(135)
-            self.current_symbol = 'east'
-
-    def do_south_east(self):
-        if not self.current_symbol == 'south_east':
-            self.send_cmd([27,135,144,137,133,131,143,128,128,128])#arrow chr(135)
-            self.current_symbol = 'south_east'
-
-    def do_south(self):
-        if not self.current_symbol == 'south':
-            self.send_cmd([27,135,132,132,149,142,132,128,128,128])#arrow chr(135)
-            self.current_symbol = 'south'
-
-    def do_south_west(self):
-        if not self.current_symbol == 'south_west':
-            self.send_cmd([27,135,129,146,148,152,158,128,128,128])#arrow chr(135)
-            self.current_symbol = 'south_west'
-
-    def do_west(self):
-        if not self.current_symbol == 'west':
-            self.send_cmd([27,135,132,136,159,136,132,128,128,128])#arrow chr(135)
-            self.current_symbol = 'west'
-
-    def do_north_west(self):
-        if not self.current_symbol == 'north_west':
-            self.send_cmd([27,135,158,152,148,146,129,128,128,128])#arrow chr(135)
-            self.current_symbol = 'north_west'
-
-    
-    def get_char(self,char_name):
-        if char_name == 'NORTH':self.do_north()
-        elif char_name =='NORTH_EAST':self.do_north_east()
-        elif char_name =='EAST':self.do_east()
-        elif char_name =='SOUTH_EAST':self.do_south_east()
-        elif char_name =='SOUTH':self.do_south()
-        elif char_name =='SOUTH_WEST':self.do_south_west()
-        elif char_name =='WEST':self.do_west()
-        elif char_name =='NORTH_WEST':self.do_north_west()
-            
-        return {
-            'CLOCK':chr(128),
-            'DEG':chr(129),
-            'LOCKED':chr(130),
-            'UNLOCKED':chr(131),
-            'DOOR':chr(132),
-            'CAMERA':chr(133),
-			'MS1':chr(133),
-			'MS2':chr(133),
-			'MS3':chr(133),
-            'PATIO':chr(134),
-            'GARAGE':'G',
-			'NORTH':chr(135),
-			'NORTH_EAST':chr(135),
-			'EAST':chr(135),
-			'SOUTH_EAST':chr(135),
-			'SOUTH':chr(135),
-			'SOUTH_WEST':chr(135),
-			'WEST':chr(135),
-			'NORTH_WEST':chr(135)}.get(char_name, chr(135))
-            
-
+    #returns the string that can be sent to lcd to generate the symbol corresponding to charname
+    def get_char(self,charname):
+        with self.mutex:   
+            try:
+                return chr(self.char_dict[charname])
+            except:
+                return '?'
 
