@@ -12,6 +12,6 @@ setup(
     description='Raspberry Pi Home Alarm System',
     long_description=open('README.txt').read(),
     install_requires=[
-        "PyDispatcher >= 2.0.3",
+        "PyDispatcher >= 2.0.3", 'rpyc', 'pydispatch', 'gdata',
     ],
 )
