@@ -30,7 +30,7 @@ Alarm Message					msg
 Alarm Mode Update Model			[alarm_mode,trig_sensor]
 Grace Update Model				grace_timer
 Button Pressed					key
-Sensor Changed					[pin,sensor_state[pin]] 	*changed to Sensor()
+Sensor Update Model				Sensor()
 Terminate
 
 ********************************************************************************"""
@@ -65,6 +65,15 @@ eventQ = Queue()
 network_is_alive = True
 lcd_init_required = False
 
+signal_log_level_dict={"Time Update Model":logging.NOTSET,
+    "Weather Update":logging.INFO,
+    "Fault Update Model":logging.WARNING,
+    "Input String Update Model":logging.DEBUG,
+    "Alarm Message":logging.INFO,
+    "Alarm Mode Update Model":logging.DEBUG,
+    "Grace Update Model":logging.NOTSET,
+    "Sensor Update Model":logging.DEBUG,
+    "Terminate":logging.WARNING}
 
 class TimeScanner(Thread):
     """ This class scans and publishes the time in its own thread.  A "Time Update" event is generated every second. """
@@ -427,14 +436,14 @@ class AlarmModel():
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
 
-        #This could be remove in favor of the RPYC remote...
-        signal.signal(signal.SIGUSR2, self.arm_signal_handler)
         logger.info("AlarmModel initialized")
 
     def __str__(self):
         string = "AlarmModel:\n"
         string += "Current Time: {:0>2}:{:0>2}".format(self.hours, self.minutes) + "\n"
         string += "Temperature: " + str(self.temp_c) + "\n"
+        string += "Wind direction: "+str(self.wind_dir)+"\n"
+        string += "Wind speed: "+str(self.wind_kph)+"\n"
         string += "Current State: " + str(self.alarm_mode) + "\n"
         string += "Last sensor triggered: " + str(self.last_trig_sensor) + " when in state: " + str(
             self.last_trig_state) + "\n"
@@ -790,9 +799,7 @@ class Sensor(Thread):
             if self.has_changed():
                 if not self.is_locked():
                     if self.is_armed():
-                        logger.info("Unlocked: " + str(self))
-                    else:
-                        logger.debug("Unlocked: " + str(self))
+                        logger.warning("Unlocked: " + str(self))
                 self.controller.handle_sensor_handler(self)
             time.sleep(self.polling_period)
 
@@ -2064,6 +2071,15 @@ class Event_serializer(Thread):
         while (True):
             try:
                 [func, kwargs] = eventQ.get()
+                try:
+                    log_level=signal_log_level_dict[kwargs["signal"]]
+                    logger.log(log_level,"Event serializer sending signal: " + kwargs["signal"])
+                except:
+                    log_level = logging.NOTSET
+                for key, value in kwargs.iteritems():
+                    if not (log_level == logging.NOTSET):
+                        if not (key == "signal") and not (key == "sender"):
+                            logger.log(log_level,"Argument " + str(key) + " : " + str(value))
                 func(**kwargs)
             except:
                 logger.warning("Exception while dispatching an event.", exc_info=True)
@@ -2101,5 +2117,3 @@ if __name__ == "__main__":
     GPIO.cleanup()
 
     subprocess.call("shutdown -r now", shell=True)
-	
-	
