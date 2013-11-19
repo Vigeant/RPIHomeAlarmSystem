@@ -2,6 +2,8 @@
 '''********************************************************************************
 RPIHomeAlarmSystem
 
+pycharm git test
+
 setup i2c modules...
 GPIO
 
