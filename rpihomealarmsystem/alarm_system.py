@@ -434,7 +434,7 @@ class AlarmModel():
     def __str__(self):
         string = "AlarmModel:\n"
         string += "Current Time: {:0>2}:{:0>2}".format(self.hours, self.minutes) + "\n"
-        string += "Temperature: " + str(self.temp_C) + "\n"
+        string += "Temperature: " + str(self.temp_c) + "\n"
         string += "Current State: " + str(self.alarm_mode) + "\n"
         string += "Last sensor triggered: " + str(self.last_trig_sensor) + " when in state: " + str(
             self.last_trig_state) + "\n"
@@ -650,7 +650,7 @@ class AlarmController():
         KeypadScanner(alarm_config_dictionary, self.model)
         #StdScanner(alarm_config_dictionary,self.model)
         WeatherScanner(alarm_config_dictionary, self.model)
-        NetworkMonitorScanner(alarm_config_dictionary, self.model)
+        NetworkMonitorScanner()
         AlarmRemote(self.model) #create the Thread that serves as a remote controller
 
         logger.info("AlarmController started")
@@ -1377,7 +1377,7 @@ class LCDView():
 
     #-------------------------------------------------------------------
     def update_weather(self, msg):
-        [temp, wind_dir, wind_kph] = [self.model.temp_C, self.model.wind_dir, self.model.wind_kph]
+        [temp, wind_dir, wind_kph] = [self.model.temp_c, self.model.wind_dir, self.model.wind_kph]
         self.wind_dir_arrow(wind_dir)
         #weather_string = "{:>3}".format(int(round(float(temp),0)))+chr(self.get_char("deg"))+ "C" +chr(self.get_char("arrow"))+"{:>2.0f}".format(wind_kph)+"kh"
         weather_string = "{:>3}".format(int(round(float(temp), 0))) + self.get_char("deg") + "C" + self.get_char(

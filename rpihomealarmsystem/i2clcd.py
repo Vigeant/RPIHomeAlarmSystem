@@ -180,7 +180,7 @@ class I2CLCD(Singleton):
         #print "exception in keys"
         else:
             #print "raw key debounce"
-            print self.raw_keypad
+            #print self.raw_keypad
             for key, state in self.key_state.iteritems():
                 if state == self.BUTTON_RELEASED:
 
