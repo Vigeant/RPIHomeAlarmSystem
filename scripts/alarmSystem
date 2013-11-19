@@ -36,12 +36,14 @@ starting(){
 		echo "Already running..."
 	else
 		echo "Starting alarmSystem"
-		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
+		#cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
+		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>&1 2>&1 &
 	fi
 }
 
 stopping(){
     # kill application you want to stop
+    echo "killing other alarm processes"
 	pkill -f alarm_system
 }
 

@@ -434,6 +434,7 @@ class AlarmModel():
         self.input_activity_setting = 4
 
         self.sensor_list = []
+        self.reboot_string = alarm_config_dictionary["reboot"]
 
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
@@ -441,21 +442,21 @@ class AlarmModel():
         logger.info("AlarmModel initialized")
 
     def __str__(self):
-        string = "AlarmModel:\n"
-        string += "Current Time: {:0>2}:{:0>2}".format(self.hours, self.minutes) + "\n"
-        string += "Temperature: " + str(self.temp_c) + "\n"
-        string += "Wind direction: " + str(self.wind_dir) + "\n"
-        string += "Wind speed: " + str(self.wind_kph) + "\n"
-        string += "Current State: " + str(self.alarm_mode) + "\n"
-        string += "Last sensor triggered: " + str(self.last_trig_sensor) + " when in state: " + str(
+        model_string = "AlarmModel:\n"
+        model_string += "Current Time: {:0>2}:{:0>2}".format(self.hours, self.minutes) + "\n"
+        model_string += "Temperature: " + str(self.temp_c) + "\n"
+        model_string += "Wind direction: " + str(self.wind_dir) + "\n"
+        model_string += "Wind speed: " + str(self.wind_kph) + "\n"
+        model_string += "Current State: " + str(self.alarm_mode) + "\n"
+        model_string += "Last sensor triggered: " + str(self.last_trig_sensor) + " when in state: " + str(
             self.last_trig_state) + "\n"
-        string += "Current Input String: " + self.input_string + "\n"
-        string += "Last broadcasted message: " + self.last_message + "\n"
-        string += "Power Fault: " + str(self.fault_power) + "\n"
-        string += "Network Fault: " + str(self.fault_network) + "\n"
-        string += self.print_sensors_state()
+        model_string += "Current Input String: " + self.input_string + "\n"
+        model_string += "Last broadcasted message: " + self.last_message + "\n"
+        model_string += "Power Fault: " + str(self.fault_power) + "\n"
+        model_string += "Network Fault: " + str(self.fault_network) + "\n"
+        model_string += self.print_sensors_state()
 
-        return string
+        return model_string
 
     #-------------------------------------------------------------------
     def keypad_input(self, key):
@@ -473,7 +474,12 @@ class AlarmModel():
 
         self.input_activity = self.input_activity_setting
 
-        if key == "*":
+        if key == "*" and self.input_string == self.reboot_string:
+            global terminate
+            terminate = True
+            eventQ.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
+            logger.warning("----- Reboot code entered. -----")
+        elif key == "*":
             self.input_string = ""
             self.display_string = ""
             self.alarm_state_machine("*")
@@ -604,7 +610,7 @@ class AlarmController():
     #------------------------------------------------------------------------------
     def __init__(self):
         #subscribe to several topics of interest (scanners)
-        dispatcher.connect(self.handle_keypad_input, signal="Button Pressed",
+        dispatcher.connect(self.handle_reboot_request, signal="Reboot",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.handle_update_time, signal="Time Update", sender=dispatcher.Any,
                            weak=False)
@@ -626,8 +632,6 @@ class AlarmController():
             logger.warning("Error while reading config file.", exc_info=True)
             print("your alarm_config.json file seems to be corrupted...\n delete it to generate new stub")
             exit
-
-        self.reboot_string = alarm_config_dictionary["reboot"]
 
         #create model (MVC pattern)
         self.model = AlarmModel(alarm_config_dictionary)
@@ -669,14 +673,12 @@ class AlarmController():
         logger.info("AlarmController started")
 
     #--------------------------------------------------------------------------------
-    def handle_keypad_input(self, msg):
-        if msg == "*" and self.model.input_string == self.reboot_string:
-            global terminate
-            terminate = True
-            eventQ.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
-            logger.warning("----- Reboot code entered. -----")
-        else:
-            self.model.keypad_input(msg)
+    @staticmethod
+    def handle_reboot_request():
+        global terminate
+        terminate = True
+        eventQ.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
+        logger.warning("----- Reboot code entered. -----")
 
     #--------------------------------------------------------------------------------
     def handle_update_time(self, msg):
@@ -698,7 +700,7 @@ class KeypadScanner(Thread):
         """ Init the keypad scanner """
         Thread.__init__(self)
         self.daemon = True
-
+        self.model = model
         try:
             driver = alarm_config_dictionary["I2C_driver"]
             logger.debug("I2C_driver: " + driver)
@@ -724,8 +726,7 @@ class KeypadScanner(Thread):
             try:
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
-                    eventQ.put([dispatcher.send,
-                                {"signal": "Button Pressed", "sender": dispatcher.Any, "msg": key}])
+                    self.model.keypad_input(key)
 
                 time.sleep(0.1)
 
@@ -1164,7 +1165,7 @@ class LCDView():
 
         try:
             self.lcd_backlight_timer_setting = alarm_config_dictionary[
-                "lcd_backlight_timer"]    #Timer setting to deactivate backlight when LCD is inactive.
+                "lcd_backlight_timer"]    # Timer setting to deactivate backlight when LCD is inactive.
         except:
             self.lcd_backlight_timer_setting = 30
 
@@ -1174,7 +1175,7 @@ class LCDView():
         #Display locations
         self.time_cursor_start = [1, 1]
         self.weather_cursor_start = [1, 11]
-        self.PIN_cursor_start = [2, 1]
+        self.pin_cursor_start = [2, 1]
         self.msg_cursor_start = [3, 1]
         self.alarm_mode_cursor_start = [2, 15]
         self.grace_timer_cursor_start = [3, 18]
@@ -1187,6 +1188,7 @@ class LCDView():
         self.lcd_backlight_timer = self.lcd_backlight_timer_setting        #Timer to deactivate backlight when LCD is inactive.
         self.fault_char = " "
         self.current_arrow_dir = ""
+        self.activity_timer_active = False
 
         #This is not elegant.  This table works for both I2CLCD and I2CBV4618. It should be dynamic...
 
@@ -1421,7 +1423,7 @@ class LCDView():
     def update_PIN(self, msg):
         string = "              "
         string = msg + string[len(msg):len(string)]
-        self.send_to_lcd(self.PIN_cursor_start, string)
+        self.send_to_lcd(self.pin_cursor_start, string)
         self.backlight_timer_reset()
 
     #-------------------------------------------------------------------
@@ -1452,25 +1454,25 @@ class LCDView():
     def update_alarm_mode(self):
         alarm_mode = self.model.alarm_mode
         if isinstance(alarm_mode, StateArmed):
-            self.backlight_timer_active(timerActive=self.lcd_backlight_timer_enabled)
+            self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  AWAY'
         if isinstance(alarm_mode, StatePartiallyArmed):
-            self.backlight_timer_active(timerActive=self.lcd_backlight_timer_enabled)
+            self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  STAY'
         elif isinstance(alarm_mode, StateDisarming):
-            self.backlight_timer_active(timerActive=False)
+            self.backlight_timer_active(timer_active=False)
             status_str = 'DISARM'
         elif isinstance(alarm_mode, StateArming):
-            self.backlight_timer_active(timerActive=False)
+            self.backlight_timer_active(timer_active=False)
             status_str = 'ARMING'
         elif isinstance(alarm_mode, StateIdle):
-            self.backlight_timer_active(timerActive=self.lcd_backlight_timer_enabled)
+            self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  IDLE'
         elif isinstance(alarm_mode, StateAlert):
-            self.backlight_timer_active(timerActive=False)
+            self.backlight_timer_active(timer_active=False)
             status_str = ' ALERT'
         elif isinstance(alarm_mode, StateFire):
-            self.backlight_timer_active(timerActive=False)
+            self.backlight_timer_active(timer_active=False)
             status_str = '  FIRE'
         logger.debug("LCDView changing state to: " + status_str)
         self.send_to_lcd(self.alarm_mode_cursor_start, status_str)
@@ -1515,8 +1517,8 @@ class LCDView():
             logger.warning("Exception in LCDView wind_dir_arrow")
             pass
 
-    def backlight_timer_active(self, timerActive):
-        self.activity_timer_active = timerActive
+    def backlight_timer_active(self, timer_active):
+        self.activity_timer_active = timer_active
         if self.activity_timer_active:
             self.backlight_timer_reset()
 
