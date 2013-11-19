@@ -58,7 +58,7 @@ import RPi.GPIO as GPIO
 import atom
 import gdata.calendar
 import gdata.calendar.service
-import pydispatch
+from pydispatch import dispatcher
 import rpyc
 
 eventQ = Queue()
@@ -82,8 +82,8 @@ class TimeScanner(Thread):
             h = time.localtime().tm_hour
             m = time.localtime().tm_min
             s = time.localtime().tm_sec
-            eventQ.put([pydispatch.dispatcher.send,
-                        {"signal": "Time Update", "sender": pydispatch.dispatcher.Any, "msg": [h, m, s]}])
+            eventQ.put([dispatcher.send,
+                        {"signal": "Time Update", "sender": dispatcher.Any, "msg": [h, m, s]}])
             time.sleep(1)
 
 
@@ -147,8 +147,8 @@ class NetworkMonitorScanner(Thread):
                     msg = "internet_on"
                 else:
                     msg = "internet_off"
-                eventQ.put([pydispatch.dispatcher.send,
-                            {"signal": "Fault Update", "sender": pydispatch.dispatcher.Any, "msg": msg}])
+                eventQ.put([dispatcher.send,
+                            {"signal": "Fault Update", "sender": dispatcher.Any, "msg": msg}])
 
             if network_is_alive:
                 time.sleep(60)
@@ -200,7 +200,7 @@ class RemoteService(rpyc.Service):
         it should be modified to restrict what can actually be done.
         """
         logger.info("Received remote event: " + signal + ", msg=" + msg)
-        eventQ.put([pydispatch.dispatcher.send, {"signal": signal, "sender": pydispatch.dispatcher.Any, "msg": msg}])
+        eventQ.put([dispatcher.send, {"signal": signal, "sender": dispatcher.Any, "msg": msg}])
 
     def exposed_set_alarm_state(self, statename): # this is an exposed method
         """ This method allows the alarm_remote to change the state of the AlarmModel. Again, this is rather unsecure;
@@ -250,7 +250,7 @@ class AbstractState():
         self.model.last_alarm_mode = self.model.alarm_mode
         self.model.alarm_mode = state
         eventQ.put(
-            [pydispatch.dispatcher.send, {"signal": "Alarm Mode Update Model", "sender": pydispatch.dispatcher.Any}])
+            [dispatcher.send, {"signal": "Alarm Mode Update Model", "sender": dispatcher.Any}])
 
 
 class StateIdle(AbstractState):
@@ -455,8 +455,8 @@ class AlarmModel():
                 if self.input_activity == 0:
                     self.input_string = ""
                     self.display_string = ""
-                    eventQ.put([pydispatch.dispatcher.send,
-                                {"signal": "Input String Update Model", "sender": pydispatch.dispatcher.Any,
+                    eventQ.put([dispatcher.send,
+                                {"signal": "Input String Update Model", "sender": dispatcher.Any,
                                  "msg": self.display_string}])
             return
 
@@ -480,8 +480,8 @@ class AlarmModel():
 
         logger.debug("Input string: " + self.input_string)
 
-        eventQ.put([pydispatch.dispatcher.send,
-                    {"signal": "Input String Update Model", "sender": pydispatch.dispatcher.Any,
+        eventQ.put([dispatcher.send,
+                    {"signal": "Input String Update Model", "sender": dispatcher.Any,
                      "msg": self.display_string}])
 
         if self.input_string == self.pin:
@@ -505,15 +505,15 @@ class AlarmModel():
     def set_grace_timer(self, t):
         self.grace_timer = t
         eventQ.put(
-            [pydispatch.dispatcher.send,
-             {"signal": "Grace Update Model", "sender": pydispatch.dispatcher.Any, "msg": self.grace_timer}])
+            [dispatcher.send,
+             {"signal": "Grace Update Model", "sender": dispatcher.Any, "msg": self.grace_timer}])
 
     #-------------------------------------------------------------------
     def update_weather(self, temp_c, wind_dir, wind_kph):
         self.temp_c = temp_c
         self.wind_dir = wind_dir
         self.wind_kph = wind_kph
-        eventQ.put([pydispatch.dispatcher.send, {"signal": "Weather Update Model", "sender": pydispatch.dispatcher.Any,
+        eventQ.put([dispatcher.send, {"signal": "Weather Update Model", "sender": dispatcher.Any,
                                                  "msg": [self.temp_c, self.wind_dir, self.wind_kph]}])
 
     def update_fault(self, msg):
@@ -529,8 +529,8 @@ class AlarmModel():
         elif msg == "internet_off":
             self.fault_network = True
             fault_type = "network"
-        eventQ.put([pydispatch.dispatcher.send,
-                    {"signal": "Fault Update Model", "sender": pydispatch.dispatcher.Any, "msg": fault_type}])
+        eventQ.put([dispatcher.send,
+                    {"signal": "Fault Update Model", "sender": dispatcher.Any, "msg": fault_type}])
 
     #-------------------------------------------------------------------
     def update_time(self, msg):
@@ -539,7 +539,7 @@ class AlarmModel():
         self.keypad_input("")
         self.alarm_state_machine("tic")
 
-        eventQ.put([pydispatch.dispatcher.send, {"signal": "Time Update Model", "sender": pydispatch.dispatcher.Any}])
+        eventQ.put([dispatcher.send, {"signal": "Time Update Model", "sender": dispatcher.Any}])
 
     #-------------------------------------------------------------------
     def add_sensor(self, sensor):
@@ -552,8 +552,8 @@ class AlarmModel():
             self.alarm_state_machine("fire", sensor)
         else:
             self.alarm_state_machine("sensor", sensor)
-        eventQ.put([pydispatch.dispatcher.send,
-                    {"signal": "Sensor Update Model", "sender": pydispatch.dispatcher.Any, "msg": sensor}])
+        eventQ.put([dispatcher.send,
+                    {"signal": "Sensor Update Model", "sender": dispatcher.Any, "msg": sensor}])
 
     def check_sensors_locked(self, state=None, sensor_type="intrusion"):
         """ Verifies if all armed sensors are locked.
@@ -580,7 +580,7 @@ class AlarmModel():
     def broadcast_message(self, msg):
         self.last_message = msg
         eventQ.put(
-            [pydispatch.dispatcher.send, {"signal": "Alarm Message", "sender": pydispatch.dispatcher.Any, "msg": msg}])
+            [dispatcher.send, {"signal": "Alarm Message", "sender": dispatcher.Any, "msg": msg}])
 
 ###################################################################################
 class AlarmController():
@@ -591,11 +591,11 @@ class AlarmController():
     #------------------------------------------------------------------------------
     def __init__(self):
         #subscribe to several topics of interest (scanners)
-        pydispatch.dispatcher.connect(self.handle_keypad_input, signal="Button Pressed",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.handle_update_time, signal="Time Update", sender=pydispatch.dispatcher.Any,
+        dispatcher.connect(self.handle_keypad_input, signal="Button Pressed",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.handle_update_time, signal="Time Update", sender=dispatcher.Any,
                                       weak=False)
-        pydispatch.dispatcher.connect(self.handle_update_fault, signal="Fault Update", sender=pydispatch.dispatcher.Any,
+        dispatcher.connect(self.handle_update_fault, signal="Fault Update", sender=dispatcher.Any,
                                       weak=False)
 
         #read configuration file
@@ -660,7 +660,7 @@ class AlarmController():
         if msg == "*" and self.model.input_string == self.reboot_string:
             global terminate
             terminate = True
-            eventQ.put([pydispatch.dispatcher.send, {"signal": "Terminate", "sender": pydispatch.dispatcher.Any, }])
+            eventQ.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
             logger.warning("----- Reboot code entered. -----")
         else:
             self.model.keypad_input(msg)
@@ -711,8 +711,8 @@ class KeypadScanner(Thread):
             try:
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
-                    eventQ.put([pydispatch.dispatcher.send,
-                                {"signal": "Button Pressed", "sender": pydispatch.dispatcher.Any, "msg": key}])
+                    eventQ.put([dispatcher.send,
+                                {"signal": "Button Pressed", "sender": dispatcher.Any, "msg": key}])
 
                 time.sleep(0.1)
 
@@ -962,14 +962,14 @@ class SoundPlayerView():
         self.lock = threading.RLock()
 
         """subscribe to several topics of interest (model)"""
-        pydispatch.dispatcher.connect(self.play_alarm_mode, signal="Alarm Mode Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.play_pin, signal="Display String Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.play_grace_timer, signal="Grace Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.play_sensor_change, signal="Sensor Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
+        dispatcher.connect(self.play_alarm_mode, signal="Alarm Mode Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.play_pin, signal="Display String Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.play_grace_timer, signal="Grace Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.play_sensor_change, signal="Sensor Update Model",
+                                      sender=dispatcher.Any, weak=False)
 
         logger.info("SoundPlayerView created")
 
@@ -1021,13 +1021,13 @@ class PiezoView():
         self.model = model
 
         """subscribe to several topics of interest (model)"""
-        pydispatch.dispatcher.connect(self.alarm_mode, signal="Alarm Mode Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.key, signal="Button Pressed", sender=pydispatch.dispatcher.Any, weak=False)
+        dispatcher.connect(self.alarm_mode, signal="Alarm Mode Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.key, signal="Button Pressed", sender=dispatcher.Any, weak=False)
         #dispatcher.connect( self.grace_timer, signal="Grace Update Model", sender=dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.sensor_change, signal="Sensor Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.exit, signal="Terminate", sender=pydispatch.dispatcher.Any, weak=False)
+        dispatcher.connect(self.sensor_change, signal="Sensor Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
 
         GPIO.setup(18, GPIO.OUT)
         self.buzzer = GPIO.PWM(18, 0.5)
@@ -1188,23 +1188,23 @@ class LCDView():
                               '######################\n')
 
         """subscribe to several topics of interest (model)"""
-        pydispatch.dispatcher.connect(self.update_weather, signal="Weather Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.update_time, signal="Time Update Model", sender=pydispatch.dispatcher.Any,
+        dispatcher.connect(self.update_weather, signal="Weather Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_time, signal="Time Update Model", sender=dispatcher.Any,
                                       weak=False)
-        pydispatch.dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.update_fault, signal="Fault Update Model", sender=pydispatch.dispatcher.Any,
+        dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_fault, signal="Fault Update Model", sender=dispatcher.Any,
                                       weak=False)
-        pydispatch.dispatcher.connect(self.update_PIN, signal="Input String Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.update_msg, signal="Alarm Message", sender=pydispatch.dispatcher.Any,
+        dispatcher.connect(self.update_PIN, signal="Input String Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_msg, signal="Alarm Message", sender=dispatcher.Any,
                                       weak=False)
-        pydispatch.dispatcher.connect(self.update_sensor_state, signal="Sensor Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.update_grace_timer, signal="Grace Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
-        pydispatch.dispatcher.connect(self.exit, signal="Terminate", sender=pydispatch.dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_sensor_state, signal="Sensor Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_grace_timer, signal="Grace Update Model",
+                                      sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
 
         signal.signal(signal.SIGUSR1, self.update_ui_file)
         self.ui_file_path = os.path.dirname(os.path.abspath(__file__)) + "/"
@@ -1267,27 +1267,27 @@ class LCDView():
     def exit(self):
         try:
             self.update_msg("Rebooting...")
-            pydispatch.dispatcher.disconnect(self.update_weather, signal="Weather Update Model",
-                                             sender=pydispatch.dispatcher.Any, weak=False)
-            pydispatch.dispatcher.disconnect(self.update_time, signal="Time Update Model",
-                                             sender=pydispatch.dispatcher.Any, weak=False)
-            pydispatch.dispatcher.disconnect(self.update_alarm_mode, signal="Alarm Mode Update Model",
-                                             sender=pydispatch.dispatcher.Any,
+            dispatcher.disconnect(self.update_weather, signal="Weather Update Model",
+                                             sender=dispatcher.Any, weak=False)
+            dispatcher.disconnect(self.update_time, signal="Time Update Model",
+                                             sender=dispatcher.Any, weak=False)
+            dispatcher.disconnect(self.update_alarm_mode, signal="Alarm Mode Update Model",
+                                             sender=dispatcher.Any,
                                              weak=False)
-            pydispatch.dispatcher.disconnect(self.update_fault, signal="Fault Update Model",
-                                             sender=pydispatch.dispatcher.Any, weak=False)
-            pydispatch.dispatcher.disconnect(self.update_PIN, signal="Input String Update Model",
-                                             sender=pydispatch.dispatcher.Any,
+            dispatcher.disconnect(self.update_fault, signal="Fault Update Model",
+                                             sender=dispatcher.Any, weak=False)
+            dispatcher.disconnect(self.update_PIN, signal="Input String Update Model",
+                                             sender=dispatcher.Any,
                                              weak=False)
-            pydispatch.dispatcher.disconnect(self.update_msg, signal="Alarm Message", sender=pydispatch.dispatcher.Any,
+            dispatcher.disconnect(self.update_msg, signal="Alarm Message", sender=dispatcher.Any,
                                              weak=False)
-            pydispatch.dispatcher.disconnect(self.update_sensor_state, signal="Sensor Update Model",
-                                             sender=pydispatch.dispatcher.Any,
+            dispatcher.disconnect(self.update_sensor_state, signal="Sensor Update Model",
+                                             sender=dispatcher.Any,
                                              weak=False)
-            pydispatch.dispatcher.disconnect(self.update_grace_timer, signal="Grace Update Model",
-                                             sender=pydispatch.dispatcher.Any,
+            dispatcher.disconnect(self.update_grace_timer, signal="Grace Update Model",
+                                             sender=dispatcher.Any,
                                              weak=False)
-            pydispatch.dispatcher.disconnect(self.exit, signal="Terminate", sender=pydispatch.dispatcher.Any,
+            dispatcher.disconnect(self.exit, signal="Terminate", sender=dispatcher.Any,
                                              weak=False)
         except IOError:
             pass
@@ -1543,8 +1543,8 @@ class StdScanner(Thread):
         while (not terminate):
             try:
                 key = self.get_key()
-                eventQ.put([pydispatch.dispatcher.send,
-                            {"signal": "Button Pressed", "sender": pydispatch.dispatcher.Any, "msg": key}])
+                eventQ.put([dispatcher.send,
+                            {"signal": "Button Pressed", "sender": dispatcher.Any, "msg": key}])
             except IOError:
                 pass
 
@@ -1706,11 +1706,11 @@ class SMSView():
         self.last_fault_event = None
 
         if (SMSSender(alarm_config_dictionary)).isAlive():
-            pydispatch.dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
-                                          sender=pydispatch.dispatcher.Any,
+            dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
+                                          sender=dispatcher.Any,
                                           weak=False)
-            pydispatch.dispatcher.connect(self.update_fault, signal="Fault Update Model",
-                                          sender=pydispatch.dispatcher.Any, weak=False)
+            dispatcher.connect(self.update_fault, signal="Fault Update Model",
+                                          sender=dispatcher.Any, weak=False)
             logger.info("SMSView created")
         else:
             logger.warning("SMSView not created properly.")
@@ -1917,11 +1917,11 @@ class EmailView():
         self.model = model
 
         if (EmailSender(alarm_config_dictionary)).isAlive():
-            pydispatch.dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
-                                          sender=pydispatch.dispatcher.Any,
+            dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
+                                          sender=dispatcher.Any,
                                           weak=False)
-            pydispatch.dispatcher.connect(self.update_fault, signal="Fault Update Model",
-                                          sender=pydispatch.dispatcher.Any, weak=False)
+            dispatcher.connect(self.update_fault, signal="Fault Update Model",
+                                          sender=dispatcher.Any, weak=False)
             logger.info("EmailView created")
         else:
             logger.warning("EmailView not created properly.")
@@ -2027,8 +2027,8 @@ class GPIOView():
 
         GPIO.setup(self.pin, GPIO.OUT, initial=self.normal_pin_value)
 
-        pydispatch.dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
-                                      sender=pydispatch.dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
+                                      sender=dispatcher.Any, weak=False)
         logger.info("GPIOView (" + self.name + ") created")
 
     def update_alarm_mode(self):
