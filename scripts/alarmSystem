@@ -35,8 +35,8 @@ starting(){
 	if [ -e /home/pi/alarm_config.json ]; then
 		echo "user alarm_config.json file was found"
 	else
-		echo "user alarm_config.json file was not found copying template in /home/pi/alarm_config.json"
-		cp -v /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_config_template.json /home/pi/alarm_config.json
+		echo "user alarm_config.json file was not found"
+		#cp -v /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_config_template.json /home/pi/alarm_config.json
 	fi
 	
 	#echo "Updating Pydispatcher thread safe from dropbox version"
