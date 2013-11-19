@@ -18,7 +18,7 @@ statusfunction(){
 	#pkill -SIGUSR1 -f alarm_system
 	#echo $?
 	#cat /home/pi/Python/RPIHomeAlarmSystem/rpihomealarmsystem/ui_file
-	python /home/pi/rpihomealarmsystem/alarm_remote.py -p
+	python /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_remote.py -p
 	
 }
 
@@ -48,8 +48,8 @@ starting(){
 		echo "Already running..."
 	else
 		echo "Starting alarmSystem"
-		cd /home/pi/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
-		#cd /home/pi/rpihomealarmsystem/ && exec python -u alarm_system.py 1>/dev/null 2>&1 &
+		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
+		#cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u alarm_system.py 1>/dev/null 2>&1 &
 	fi
 	
 	#statusfunction
@@ -76,7 +76,7 @@ case "$1" in
 	;;
   arm)
 	#pkill -SIGUSR2 -f alarm_system
-	python /home/pi/rpihomealarmsystem/alarm_remote.py -s StateArmed
+	python /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_remote.py -s StateArmed
 	statusfunction
 	;;
   *)
