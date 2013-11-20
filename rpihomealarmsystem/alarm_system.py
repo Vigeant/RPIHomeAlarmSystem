@@ -80,10 +80,11 @@ signal_log_level_dict = {"Time Update Model": logging.NOTSET,
 class TimeScanner(Thread):
     """ This class scans and publishes the time in its own thread.  A "Time Update" event is generated every second. """
     #------------------------------------------------------------------------------
-    def __init__(self):
+    def __init__(self, model):
         """ Init the time scanner """
         Thread.__init__(self)
         self.daemon = True
+        self.model = model
         self.start()
 
     #-------------------------------------------------------------------
@@ -93,8 +94,7 @@ class TimeScanner(Thread):
             h = time.localtime().tm_hour
             m = time.localtime().tm_min
             s = time.localtime().tm_sec
-            eventQ.put([dispatcher.send,
-                        {"signal": "Time Update", "sender": dispatcher.Any, "msg": [h, m, s]}])
+            self.model.update_time(h,m,s)
             time.sleep(1)
 
 
@@ -137,9 +137,11 @@ class WeatherScanner(Thread):
 class NetworkMonitorScanner(Thread):
     """ This class verifies the network connectivity periodically. """
     #------------------------------------------------------------------------------
-    def __init__(self):
+    def __init__(self, model):
         """ Init the NetworkMonitor scanner """
         Thread.__init__(self)
+
+        self.model = model
         self.daemon = True
         self.url = 'http://74.125.228.100'
         self.is_alive = True
@@ -157,8 +159,7 @@ class NetworkMonitorScanner(Thread):
                     msg = "internet_on"
                 else:
                     msg = "internet_off"
-                eventQ.put([dispatcher.send,
-                            {"signal": "Fault Update", "sender": dispatcher.Any, "msg": msg}])
+                self.model.update_fault(self, msg)
 
             if network_is_alive:
                 time.sleep(60)
@@ -464,7 +465,6 @@ class AlarmModel():
 
     #-------------------------------------------------------------------
     def keypad_input(self, key):
-
         if key == "":    # System tic
             if self.input_activity > 0:
                 self.input_activity -= 1
@@ -555,6 +555,7 @@ class AlarmModel():
                                       "msg": [self.temp_c, self.wind_dir, self.wind_kph]}])
 
     def update_fault(self, msg):
+        logger.warning("Alarm Fault. msg=" + msg)
         if msg == "onbattery":
             self.fault_power = True
             fault_type = "power"
@@ -573,10 +574,12 @@ class AlarmModel():
         eventQ.put([dispatcher.send,{"signal": "Fault Update Model", "sender": dispatcher.Any, "msg": fault_type}])
 
     #-------------------------------------------------------------------
-    def update_time(self, msg):
-        [self.hours, self.minutes, self.seconds] = msg
+    def update_time(self, h, m, s):
+        self.hours = h
+        self.minutes = m
+        self.seconds = s
 
-        self.keypad_input("")
+        self.keypad_input("")  # TODO review wtf???
         self.alarm_state_machine("tic")
 
         eventQ.put([dispatcher.send, {"signal": "Time Update Model", "sender": dispatcher.Any}])
@@ -633,8 +636,6 @@ class AlarmController():
         #subscribe to several topics of interest (scanners)
         dispatcher.connect(self.handle_reboot_request, signal="Reboot",
                            sender=dispatcher.Any, weak=False)
-        dispatcher.connect(self.handle_update_time, signal="Time Update", sender=dispatcher.Any,
-                           weak=False)
         dispatcher.connect(self.handle_update_fault, signal="Fault Update", sender=dispatcher.Any,
                            weak=False)
 
@@ -669,12 +670,12 @@ class AlarmController():
             pass
 
         #create scanners (threads that periodically poll things)
-        TimeScanner()
+        TimeScanner(self.model)
         #SensorScanner(alarm_config_dictionary,self,self.model)  #Not required when the Sensors run each on a thread.
         KeypadScanner(alarm_config_dictionary, self.model)
         #StdScanner(alarm_config_dictionary,self.model)
         WeatherScanner(alarm_config_dictionary, self.model)
-        NetworkMonitorScanner()
+        NetworkMonitorScanner(self.model)
         AlarmRemote(self.model) #create the Thread that serves as a remote controller
 
         logger.info("AlarmController started")
@@ -724,10 +725,6 @@ class AlarmController():
         else:
             self.model.keypad_input(msg)
 
-    #--------------------------------------------------------------------------------
-    def handle_update_time(self, msg):
-        self.model.update_time(msg)
-
     def handle_update_fault(self, msg):
         logger.warning("Alarm Fault. msg=" + msg)
         self.model.update_fault(msg)
@@ -771,7 +768,6 @@ class KeypadScanner(Thread):
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
                     self.model.keypad_input(key)
-
                 time.sleep(0.1)
 
             except:
@@ -1586,7 +1582,7 @@ class StdScanner(Thread):
         """ Run the keyboard scanner """
         logger.info("StdScanner started")
         global terminate
-        while (not terminate):
+        while not terminate:
             try:
                 key = self.get_key()
                 eventQ.put([dispatcher.send,
