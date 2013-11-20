@@ -37,6 +37,7 @@ Terminate
 import time
 import urllib2
 import json
+import yaml
 import sys
 import string
 import random
@@ -60,6 +61,7 @@ import gdata.calendar
 import gdata.calendar.service
 from pydispatch import dispatcher
 import rpyc
+#from rpihomealarmsystem.alarm_system import AbstractState
 
 eventQ = Queue()
 network_is_alive = True
@@ -74,7 +76,6 @@ signal_log_level_dict = {"Time Update Model": logging.NOTSET,
                          "Grace Update Model": logging.NOTSET,
                          "Sensor Update Model": logging.DEBUG,
                          "Terminate": logging.WARNING}
-
 
 class TimeScanner(Thread):
     """ This class scans and publishes the time in its own thread.  A "Time Update" event is generated every second. """
@@ -209,14 +210,15 @@ class RemoteService(rpyc.Service):
         """ This method allows the alarm_remote to generate events through the pydispatcher.  This is rather unsafe;
         it should be modified to restrict what can actually be done.
         """
-        logger.info("Received remote event: " + signal_name + ", msg=" + msg)
-        eventQ.put([dispatcher.send, {"signal": signal_name, "sender": dispatcher.Any, "msg": msg}])
+        logger.info("Received remote create_event(): " + signal + ", msg=" + msg)
+        eventQ.put([dispatcher.send, {"signal": signal, "sender": dispatcher.Any, "msg": msg}])
 
     def exposed_set_alarm_state(self, state_name):  # this is an exposed method
         """ This method allows the alarm_remote to change the state of the AlarmModel. Again, this is rather unsafe;
         it should be modified to restrict what can actually be done.  For example, de-arming the AlarmModel should
         require the PIN.
         """
+        logger.info("Received remote set_alarm_state() to state: " + state_name)
         try:
             State = getattr(sys.modules[__name__], state_name)
             self.model.alarm_mode.set_state(State())
@@ -226,6 +228,7 @@ class RemoteService(rpyc.Service):
     def exposed_get_model(self): # this is an exposed method
         """ This method simply returns an AlarmModel string containing its current state.
         """
+        logger.debug("Received remote get_model().")
         return str(self.model)
 
 
@@ -415,7 +418,8 @@ class AlarmModel():
         self.last_trig_state = None
 
         self.temp_c = "0.0"
-        self.wind_dir = 0
+        self.wind_deg = 0
+        self.wind_dir = ""
         self.wind_kph = 0.0
 
         self.hours = 0
@@ -445,7 +449,7 @@ class AlarmModel():
         model_string = "AlarmModel:\n"
         model_string += "Current Time: {:0>2}:{:0>2}".format(self.hours, self.minutes) + "\n"
         model_string += "Temperature: " + str(self.temp_c) + "\n"
-        model_string += "Wind direction: " + str(self.wind_dir) + "\n"
+        model_string += "Wind direction: " + str(self.wind_dir) + " (" + str(self.wind_deg) + "deg) \n"
         model_string += "Wind speed: " + str(self.wind_kph) + "\n"
         model_string += "Current State: " + str(self.alarm_mode) + "\n"
         model_string += "Last sensor triggered: " + str(self.last_trig_sensor) + " when in state: " + str(
@@ -526,10 +530,27 @@ class AlarmModel():
              {"signal": "Grace Update Model", "sender": dispatcher.Any, "msg": self.grace_timer}])
 
     #-------------------------------------------------------------------
-    def update_weather(self, temp_c, wind_dir, wind_kph):
+    def update_weather(self, temp_c, wind_deg, wind_kph):
         self.temp_c = temp_c
-        self.wind_dir = wind_dir
         self.wind_kph = wind_kph
+        self.wind_deg = wind_deg
+        if 23 <= wind_deg < 68:        #SOUTH_WEST
+            self.wind_dir = "SOUTH_WEST"
+        elif 68 <= wind_deg < 113:        #WEST
+            self.wind_dir = "WEST"
+        elif 113 <= wind_deg < 158:    #NORTH_WEST
+            self.wind_dir = "NORTH_WEST"
+        elif 158 <= wind_deg < 203:    #NORTH
+            self.wind_dir = "NORTH"
+        elif 203 <= wind_deg < 248:        #NORTH_EAST
+            self.wind_dir = "NORTH_EAST"
+        elif 248 <= wind_deg < 293:        #EAST
+            self.wind_dir = "EAST"
+        elif 293 <= wind_deg < 338:        #SOUTH_EAST
+            self.wind_dir = "SOUTH_EAST"
+        else:                            #SOUTH
+            self.wind_dir = "SOUTH"
+
         eventQ.put([dispatcher.send, {"signal": "Weather Update Model", "sender": dispatcher.Any,
                                       "msg": [self.temp_c, self.wind_dir, self.wind_kph]}])
 
@@ -617,21 +638,7 @@ class AlarmController():
         dispatcher.connect(self.handle_update_fault, signal="Fault Update", sender=dispatcher.Any,
                            weak=False)
 
-        #read configuration file
-        script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
-        logger.info('script_path ' + script_path)
-        try:
-            alarm_config_file = open(script_path + "../../alarm_config.json", 'r')
-        except:
-            logger.warning("could not open file : " + script_path + "../../alarm_config.json ...")
-
-        try:
-            alarm_config_dictionary = json.loads(alarm_config_file.read())
-            alarm_config_file.close()
-        except ValueError:
-            logger.warning("Error while reading config file.", exc_info=True)
-            print("your alarm_config.json file seems to be corrupted...\n delete it to generate new stub")
-            exit
+        alarm_config_dictionary = self.get_config()
 
         #create model (MVC pattern)
         self.model = AlarmModel(alarm_config_dictionary)
@@ -671,7 +678,7 @@ class AlarmController():
         AlarmRemote(self.model) #create the Thread that serves as a remote controller
 
         logger.info("AlarmController started")
-
+         
     #--------------------------------------------------------------------------------
     @staticmethod
     def handle_reboot_request():
@@ -679,6 +686,43 @@ class AlarmController():
         terminate = True
         eventQ.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
         logger.warning("----- Reboot code entered. -----")
+    
+    def get_config(self):
+        #read configuration file
+        script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
+        logger.info('script_path ' + script_path)
+
+        logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
+        try:
+                alarm_config_file = open(script_path + "../../alarm_config.yaml", 'r')
+                alarm_config_dictionary = yaml.load(alarm_config_file)
+                logger.debug("YAML config file loaded succesfully")
+                return alarm_config_dictionary
+        except:
+            logger.warning("Error while reading YAML config file.", exc_info=True)
+
+        logger.debug("----- Reverting to JSON config file (alarm_config.json) -----")
+        try:
+            alarm_config_file = open(script_path + "../../alarm_config.json", 'r')
+        except:
+            logger.warning("could not open file : " + script_path + "../../alarm_config.json ...")
+        try:
+            alarm_config_dictionary = json.loads(alarm_config_file.read())
+            alarm_config_file.close()
+            return alarm_config_dictionary
+        except ValueError:
+            logger.warning("Error while reading JSON config file. Your alarm_config.json file seems to be corrupted...", exc_info=True)
+            exit
+
+    #--------------------------------------------------------------------------------
+    def handle_keypad_input(self, msg):
+        if msg == "*" and self.model.input_string == self.reboot_string:
+            global terminate
+            terminate = True
+            eventQ.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
+            logger.warning("----- Reboot code entered. -----")
+        else:
+            self.model.keypad_input(msg)
 
     #--------------------------------------------------------------------------------
     def handle_update_time(self, msg):
@@ -976,7 +1020,7 @@ class SoundPlayerView():
         """subscribe to several topics of interest (model)"""
         dispatcher.connect(self.play_alarm_mode, signal="Alarm Mode Update Model",
                            sender=dispatcher.Any, weak=False)
-        dispatcher.connect(self.play_pin, signal="Display String Update Model",
+        dispatcher.connect(self.play_pin, signal="Input String Update Model",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.play_grace_timer, signal="Grace Update Model",
                            sender=dispatcher.Any, weak=False)
@@ -1035,7 +1079,7 @@ class PiezoView():
         """subscribe to several topics of interest (model)"""
         dispatcher.connect(self.alarm_mode, signal="Alarm Mode Update Model",
                            sender=dispatcher.Any, weak=False)
-        dispatcher.connect(self.key, signal="Button Pressed", sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.key, signal="Input String Update Model", sender=dispatcher.Any, weak=False)
         #dispatcher.connect( self.grace_timer, signal="Grace Update Model", sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.sensor_change, signal="Sensor Update Model",
                            sender=dispatcher.Any, weak=False)
@@ -1169,6 +1213,11 @@ class LCDView():
         except:
             self.lcd_backlight_timer_setting = 30
 
+        try:
+            self.lcd_custom_chars = alarm_config_dictionary["lcd_custom_chars"]
+        except:
+            logger.warning("Problem loading lcd_custom_chars", exc_info=True)
+
         self.lcd_backlight_timer_enabled = not (self.lcd_backlight_timer_setting == 0)
         self.lcd_backlight_current_state = False
 
@@ -1244,16 +1293,14 @@ class LCDView():
             logger.debug("LCD init completed.")
 
             logger.debug("LCD Changing custom chars...")
-            self.lcd.change_custom_char(0, [128, 142, 149, 151, 145, 142, 128, 128], "clock")
-            self.lcd.change_custom_char(1, [159, 149, 159, 149, 159, 159, 159, 159], "door")
-            #self.lcd.change_custom_char(2,[128,142,145,145,159,155,159,159],"locked")	#Currently not used
-            self.lcd.change_custom_char(3, [159, 145, 145, 147, 147, 145, 145, 159], "patio")
-            self.lcd.change_custom_char(4, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
-            self.lcd.change_custom_char(5, [130, 137, 133, 149, 149, 133, 137, 130], "motion")
-            self.lcd.change_custom_char(6, [140, 146, 146, 140, 128, 128, 128, 128], "deg")
-            self.lcd.change_custom_char(7, [159, 142, 132, 142, 142, 142, 142, 142], "camera")
-            #self.lcd.change_custom_char(7,[128,142,144,144,159,155,159,159],"unlock") #Currently not used
             self.current_arrow_dir = "SOUTH_WEST"
+            self.lcd.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
+
+            for [index, data, symbol] in self.lcd_custom_chars:
+                if not index == 0:
+                    self.lcd.change_custom_char(index, data, symbol)
+            #self.lcd.change_custom_char(2,[128,142,145,145,159,155,159,159],"locked")	#Currently not used
+            #self.lcd.change_custom_char(7,[128,142,144,144,159,155,159,159],"unlock") #Currently not used
             logger.debug("LCD custom chars completed.")
 
             self.table = string.maketrans(
@@ -1391,7 +1438,7 @@ class LCDView():
     #-------------------------------------------------------------------
     def update_weather(self, msg):
         [temp, wind_dir, wind_kph] = [self.model.temp_c, self.model.wind_dir, self.model.wind_kph]
-        self.wind_dir_arrow(wind_dir)
+        self.wind_dir_arrow(self.model.wind_dir)
         #weather_string = "{:>3}".format(int(round(float(temp),0)))+chr(self.get_char("deg"))+ "C" +chr(self.get_char("arrow"))+"{:>2.0f}".format(wind_kph)+"kh"
         weather_string = "{:>3}".format(int(round(float(temp), 0))) + self.get_char("deg") + "C" + self.get_char(
             "arrow") + "{:>2.0f}".format(wind_kph) + "kh"
@@ -1481,38 +1528,24 @@ class LCDView():
     #-------------------------------------------------------------------
     def wind_dir_arrow(self, wind_deg):
         try:
-            if 23 <= wind_deg < 68:        #SOUTH_WEST
-                if not self.current_arrow_dir == "SOUTH_WEST":
-                    self.lcd.change_custom_char(4, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
-                    self.current_arrow_dir = "SOUTH_WEST"
-            elif 68 <= wind_deg < 113:        #WEST
-                if not self.current_arrow_dir == "WEST":
-                    self.lcd.change_custom_char(4, [128, 132, 136, 159, 136, 132, 128, 128], "arrow")
-                    self.current_arrow_dir = "WEST"
-            elif 113 <= wind_deg < 158:    #NORTH_WEST
-                if not self.current_arrow_dir == "NORTH_WEST":
-                    self.lcd.change_custom_char(4, [128, 158, 152, 148, 146, 129, 128, 128], "arrow")
-                    self.current_arrow_dir = "NORTH_WEST"
-            elif 158 <= wind_deg < 203:    #NORTH
-                if not self.current_arrow_dir == "NORTH":
-                    self.lcd.change_custom_char(4, [128, 132, 142, 149, 132, 132, 128, 128], "arrow")
-                    self.current_arrow_dir = "NORTH"
-            elif 203 <= wind_deg < 248:        #NORTH_EAST
-                if not self.current_arrow_dir == "NORTH_EAST":
-                    self.lcd.change_custom_char(4, [128, 143, 131, 133, 137, 144, 128, 128], "arrow")
-                    self.current_arrow_dir = "NORTH_EAST"
-            elif 248 <= wind_deg < 293:        #EAST
-                if not self.current_arrow_dir == "EAST":
-                    self.lcd.change_custom_char(4, [128, 132, 130, 159, 130, 132, 128, 128], "arrow")
-                    self.current_arrow_dir = "EAST"
-            elif 293 <= wind_deg < 338:        #SOUTH_EAST
-                if not self.current_arrow_dir == "SOUTH_EAST":
-                    self.lcd.change_custom_char(4, [128, 144, 137, 133, 131, 143, 128, 128], "arrow")
-                    self.current_arrow_dir = "SOUTH_EAST"
-            else:                            #SOUTH
-                if not self.current_arrow_dir == "SOUTH":
-                    self.lcd.change_custom_char(4, [128, 132, 132, 149, 142, 132, 128, 128], "arrow")
-                    self.current_arrow_dir = "SOUTH"
+            if not (self.current_arrow_dir == wind_deg):
+                if wind_deg == "SOUTH_WEST":
+                    self.lcd.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
+                elif wind_deg == "WEST":
+                    self.lcd.change_custom_char(0, [128, 132, 136, 159, 136, 132, 128, 128], "arrow")
+                elif wind_deg == "NORTH_WEST":
+                    self.lcd.change_custom_char(0, [128, 158, 152, 148, 146, 129, 128, 128], "arrow")
+                elif wind_deg == "NORTH":
+                    self.lcd.change_custom_char(0, [128, 132, 142, 149, 132, 132, 128, 128], "arrow")
+                elif wind_deg == "NORTH_EAST":
+                    self.lcd.change_custom_char(0, [128, 143, 131, 133, 137, 144, 128, 128], "arrow")
+                elif wind_deg == "EAST":
+                    self.lcd.change_custom_char(0, [128, 132, 130, 159, 130, 132, 128, 128], "arrow")
+                elif wind_deg == "SOUTH_EAST":
+                    self.lcd.change_custom_char(0, [128, 144, 137, 133, 131, 143, 128, 128], "arrow")
+                else: #SOUTH
+                    self.lcd.change_custom_char(0, [128, 132, 132, 149, 142, 132, 128, 128], "arrow")
+                self.current_arrow_dir = wind_deg
         except:
             logger.warning("Exception in LCDView wind_dir_arrow")
             pass
@@ -2063,7 +2096,7 @@ class GPIOView():
             return True
         return state in self.states_from
 
-
+###################################################################################		
 class EventSerializer(Thread):
     """ This serializes send events to ensure thread safety """
     #------------------------------------------------------------------------------

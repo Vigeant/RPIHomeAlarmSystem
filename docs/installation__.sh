@@ -44,7 +44,8 @@ sudo pip install PyDispatcher # added to auto setup
 ##and to install RPYC
 sudo pip install rpyc
 
-
+#install PYYAML
+sudo pip install pyyaml
 
 ##install alsa for wav playback
 sudo apt-get install alsa-utils 
