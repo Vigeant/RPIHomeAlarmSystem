@@ -247,7 +247,8 @@ class AlarmController():
         #create sensors
         self.sensor_map = alarm_config_dictionary["sensor_map"]
         GPIO.setmode(
-            GPIO.BCM) #using pin numbering of the channel number on the Broadcom chip (ie. not the pin number on the connector)
+            GPIO.BCM)   # using pin numbering of the channel number on the Broadcom chip (ie. not the pin number
+                        # on the connector)
         for sensor_config in self.sensor_map:
             AlarmModel.getInstance().add_sensor(Sensor(self, sensor_config, dedicated_thread=True))
         logger.info("Sensors created")
@@ -593,15 +594,15 @@ class SoundPlayerView():
     def play_alarm_mode(self):
         alarm_mode = AlarmModel.getInstance().alarm_mode
         logger.debug("play_alarm_mode")
-        if isinstance(alarm_mode, StateIdle):
+        if alarm_mode.str() == "StateIdle":
             try:
                 with self.lock:
-                    if isinstance(AlarmModel.getInstance().last_alarm_mode, StateAlert):
+                    if AlarmModel.getInstance().last_alarm_mode.str() == "StateAlert":
                         subprocess.call("ps x | grep '[a]play_notes' | awk '{ print $1 }' | xargs kill", shell=True)
                     self.play_notes("grace_beeps3")
             except:
                 logger.warning("Error when trying to kill aplay process", exc_info=True)
-        elif isinstance(alarm_mode, StateAlert):
+        elif alarm_mode.str() == "StateAlert":
             self.play_notes("alarm_wav")
 
     def play_pin(self, msg):
@@ -650,7 +651,7 @@ class PiezoView():
                            [880, 0, 0]]}])
 
     def grace_timer(self, msg):
-        if isinstance(self.alarm_mode, StateArming):
+        if AlarmModel.getInstance().alarm_mode.str() == "StateArming":
             if msg > 10:
                 self.player.next([self.player.play_notes, {"string": [[200, 50, 0.1], [200, 0, 0]]}])
             else:
@@ -665,16 +666,16 @@ class PiezoView():
 
         self.player.next([self.player.stop, {}])
 
-        if isinstance(alarm_mode, StateAlert):
+        if alarm_mode.str() == "StateAlert":
             self.player.next([self.player.play_siren, {}])
-        elif isinstance(alarm_mode, StateArming):
+        elif alarm_mode.str() == "StateArming":
             self.player.next([self.player.play_continuously, {"string": [[200, 50, 0.1], [200, 0, 0.9]]}])
-        elif isinstance(alarm_mode, StateDisarming):
+        elif alarm_mode.str() == "StateDisarming":
             self.player.next([self.player.play_continuously, {"string": [[2200, 50, 0.4], [2200, 0, 0.1]]}])
-        elif isinstance(alarm_mode, StateIdle):
+        elif alarm_mode.str() == "StateIdle":
             self.player.next(
                 [self.player.play_notes, {"string": [[440, 50, 0.1], [440, 0, 0.05], [440, 50, 0.1], [440, 0, 0]]}])
-        elif isinstance(alarm_mode, StatePartiallyArmed):
+        elif alarm_mode.str() == "StatePartiallyArmed":
             self.player.next([self.player.play_notes, {
                 "string": [[440, 50, 0.1], [440, 0, 0.05], [503, 50, 0.1], [503, 0, 0.05], [566, 50, 0.1],
                            [566, 0, 0]]}])
@@ -831,20 +832,20 @@ class LCDView():
         lcd_init_required = False
 
         try:
-            self.lcd = self.driver.getInstance()
+            lcd = self.driver.getInstance()
             logger.debug("LCD initialization.")
-            self.lcd.init()
+            lcd.init()
             logger.debug("LCD init completed.")
 
             logger.debug("LCD Changing custom chars...")
             self.current_arrow_dir = "SOUTH_WEST"
-            self.lcd.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
+            lcd.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
 
             for [index, data, symbol] in self.lcd_custom_chars:
                 if not index == 0:
-                    self.lcd.change_custom_char(index, data, symbol)
-            #self.lcd.change_custom_char(2,[128,142,145,145,159,155,159,159],"locked")	#Currently not used
-            #self.lcd.change_custom_char(7,[128,142,144,144,159,155,159,159],"unlock") #Currently not used
+                    lcd.change_custom_char(index, data, symbol)
+            #lcd.change_custom_char(2,[128,142,145,145,159,155,159,159],"locked")	#Currently not used
+            #lcd.change_custom_char(7,[128,142,144,144,159,155,159,159],"unlock") #Currently not used
             logger.debug("LCD custom chars completed.")
 
             self.table = string.maketrans(
@@ -920,7 +921,7 @@ class LCDView():
             if lcd_init_required:
                 self.init_screen()
             if not lcd_init_required:
-                self.lcd.print_str(s, row, col)
+                self.driver.getInstance().print_str(s, row, col)
         except (IOError):
             logger.warning("Exception in LCDView send_to_lcd")
             lcd_init_required = True
@@ -931,7 +932,7 @@ class LCDView():
         global lcd_init_required
         try:
             if not lcd_init_required:
-                temp = self.lcd.get_char(symbol)
+                temp = self.driver.getInstance().get_char(symbol)
         except (IOError, AttributeError):
             logger.warning("Exception in LCDView get_char")
             lcd_init_required = True
@@ -944,7 +945,7 @@ class LCDView():
             if not lcd_init_required:
                 if not (self.lcd_backlight_current_state == on):
                     logger.debug("LCDView changing backlight to: " + str(on))
-                    self.lcd.set_backlight(on)
+                    self.driver.getInstance().set_backlight(on)
                     self.lcd_backlight_current_state = on
         except (IOError, AttributeError):
             logger.warning("Exception in LCDView set_backlight")
@@ -1044,25 +1045,25 @@ class LCDView():
     #-------------------------------------------------------------------
     def update_alarm_mode(self):
         alarm_mode = AlarmModel.getInstance().alarm_mode
-        if isinstance(alarm_mode, StateArmed):
+        if alarm_mode.str() == "StateArmed":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  AWAY'
-        if isinstance(alarm_mode, StatePartiallyArmed):
+        if alarm_mode.str() == "StatePartiallyArmed":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  STAY'
-        elif isinstance(alarm_mode, StateDisarming):
+        elif alarm_mode.str() == "StateDisarming":
             self.backlight_timer_active(timer_active=False)
             status_str = 'DISARM'
-        elif isinstance(alarm_mode, StateArming):
+        elif alarm_mode.str() == "StateArming":
             self.backlight_timer_active(timer_active=False)
             status_str = 'ARMING'
-        elif isinstance(alarm_mode, StateIdle):
+        elif alarm_mode.str() == "StateIdle":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  IDLE'
-        elif isinstance(alarm_mode, StateAlert):
+        elif alarm_mode.str() == "StateAlert":
             self.backlight_timer_active(timer_active=False)
             status_str = ' ALERT'
-        elif isinstance(alarm_mode, StateFire):
+        elif alarm_mode.str() == "StateFire":
             self.backlight_timer_active(timer_active=False)
             status_str = '  FIRE'
         logger.debug("LCDView changing state to: " + status_str)
@@ -1074,21 +1075,21 @@ class LCDView():
         try:
             if not (self.current_arrow_dir == wind_deg):
                 if wind_deg == "SOUTH_WEST":
-                    self.lcd.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
                 elif wind_deg == "WEST":
-                    self.lcd.change_custom_char(0, [128, 132, 136, 159, 136, 132, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 132, 136, 159, 136, 132, 128, 128], "arrow")
                 elif wind_deg == "NORTH_WEST":
-                    self.lcd.change_custom_char(0, [128, 158, 152, 148, 146, 129, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 158, 152, 148, 146, 129, 128, 128], "arrow")
                 elif wind_deg == "NORTH":
-                    self.lcd.change_custom_char(0, [128, 132, 142, 149, 132, 132, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 132, 142, 149, 132, 132, 128, 128], "arrow")
                 elif wind_deg == "NORTH_EAST":
-                    self.lcd.change_custom_char(0, [128, 143, 131, 133, 137, 144, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 143, 131, 133, 137, 144, 128, 128], "arrow")
                 elif wind_deg == "EAST":
-                    self.lcd.change_custom_char(0, [128, 132, 130, 159, 130, 132, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 132, 130, 159, 130, 132, 128, 128], "arrow")
                 elif wind_deg == "SOUTH_EAST":
-                    self.lcd.change_custom_char(0, [128, 144, 137, 133, 131, 143, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 144, 137, 133, 131, 143, 128, 128], "arrow")
                 else: #SOUTH
-                    self.lcd.change_custom_char(0, [128, 132, 132, 149, 142, 132, 128, 128], "arrow")
+                    lcd.change_custom_char(0, [128, 132, 132, 149, 142, 132, 128, 128], "arrow")
                 self.current_arrow_dir = wind_deg
         except:
             logger.warning("Exception in LCDView wind_dir_arrow")

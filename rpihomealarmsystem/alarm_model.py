@@ -233,6 +233,7 @@ class AlarmModel(Singleton):
         event_q.put(
             [dispatcher.send, {"signal": "Alarm Message", "sender": dispatcher.Any, "msg": msg}])
 
+
 class AbstractState():
     """ This class is the default behaviour of a state.  As per the name, it is meant to be abstract and
     specialized.  Every state can transition to StateFire.  This behaviour is implemented by the AbstractState.
