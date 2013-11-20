@@ -61,30 +61,22 @@ import gdata.calendar
 import gdata.calendar.service
 from pydispatch import dispatcher
 import rpyc
+from alarm_model import AlarmModel
 #from rpihomealarmsystem.alarm_system import AbstractState
+from event_serializer import event_q
+from event_serializer import EventSerializer
 
-eventQ = Queue()
 network_is_alive = True
 lcd_init_required = False
 
-signal_log_level_dict = {"Time Update Model": logging.NOTSET,
-                         "Weather Update": logging.INFO,
-                         "Fault Update Model": logging.WARNING,
-                         "Input String Update Model": logging.DEBUG,
-                         "Alarm Message": logging.INFO,
-                         "Alarm Mode Update Model": logging.DEBUG,
-                         "Grace Update Model": logging.NOTSET,
-                         "Sensor Update Model": logging.DEBUG,
-                         "Terminate": logging.WARNING}
 
 class TimeScanner(Thread):
     """ This class scans and publishes the time in its own thread.  A "Time Update" event is generated every second. """
     #------------------------------------------------------------------------------
-    def __init__(self, model):
+    def __init__(self):
         """ Init the time scanner """
         Thread.__init__(self)
         self.daemon = True
-        self.model = model
         self.start()
 
     #-------------------------------------------------------------------
@@ -94,17 +86,16 @@ class TimeScanner(Thread):
             h = time.localtime().tm_hour
             m = time.localtime().tm_min
             s = time.localtime().tm_sec
-            self.model.update_time(h,m,s)
+            AlarmModel.getInstance().update_time(h, m, s)
             time.sleep(1)
 
 
 class WeatherScanner(Thread):
     """ This class scans the weather in its own thread. A "Weather Update" event is generated every 5 minutes. """
 
-    def __init__(self, alarm_config_dictionary, model):
+    def __init__(self, alarm_config_dictionary):
         """ Init the weather scanner """
         Thread.__init__(self)
-        self.model = model
         self.daemon = True
         self.url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
                    + "/geolookup/conditions/q/" + alarm_config_dictionary["wunderground location"] + ".json"
@@ -126,7 +117,7 @@ class WeatherScanner(Thread):
                     wind_dir = parsed_json_weather['current_observation']['wind_degrees']
                     wind_kph = parsed_json_weather['current_observation']['wind_mph'] * 1.61
                     temp = parsed_json_weather['current_observation']['feelslike_c']
-                    self.model.update_weather(temp, wind_dir, wind_kph)
+                    AlarmModel.getInstance().update_weather(temp, wind_dir, wind_kph)
 
                 except:
                     logger.warning("Exception in WeatherScanner", exc_info=True)
@@ -137,11 +128,10 @@ class WeatherScanner(Thread):
 class NetworkMonitorScanner(Thread):
     """ This class verifies the network connectivity periodically. """
     #------------------------------------------------------------------------------
-    def __init__(self, model):
+    def __init__(self):
         """ Init the NetworkMonitor scanner """
         Thread.__init__(self)
 
-        self.model = model
         self.daemon = True
         self.url = 'http://74.125.228.100'
         self.is_alive = True
@@ -159,7 +149,7 @@ class NetworkMonitorScanner(Thread):
                     msg = "internet_on"
                 else:
                     msg = "internet_off"
-                self.model.update_fault(self, msg)
+                AlarmModel.getInstance().update_fault(self, msg)
 
             if network_is_alive:
                 time.sleep(60)
@@ -180,23 +170,22 @@ class NetworkMonitorScanner(Thread):
 class AlarmRemote(Thread):
     """ This class creates a simple thread that contains the RemoteService. """
 
-    def __init__(self, model):
+    def __init__(self):
         Thread.__init__(self)
         self.daemon = True
         self.start()
-        RemoteService.model = model
 
     def run(self):
         logger.info("AlarmRemote started")
         from rpyc.utils.server import ThreadedServer
 
-        t = ThreadedServer(RemoteService, port=18861)
+        t = ThreadedServer(RemoteService, port=18861)   # TODO a verifier si cest necessaire de partir un thread
+                                                        # pour partir un thread
         t.start()
 
 
 class RemoteService(rpyc.Service):
     """ This class uses rpyc to provide access to and control of the RPIAlarmSystem """
-    model = None
 
     def on_connect(self):
         # code that runs when a connection is created
@@ -211,8 +200,8 @@ class RemoteService(rpyc.Service):
         """ This method allows the alarm_remote to generate events through the pydispatcher.  This is rather unsafe;
         it should be modified to restrict what can actually be done.
         """
-        logger.info("Received remote create_event(): " + signal + ", msg=" + msg)
-        eventQ.put([dispatcher.send, {"signal": signal, "sender": dispatcher.Any, "msg": msg}])
+        logger.info("Received remote create_event(): " + signal_name + ", msg=" + msg)
+        event_q.put([dispatcher.send, {"signal": signal, "sender": dispatcher.Any, "msg": msg}])
 
     def exposed_set_alarm_state(self, state_name):  # this is an exposed method
         """ This method allows the alarm_remote to change the state of the AlarmModel. Again, this is rather unsafe;
@@ -221,8 +210,8 @@ class RemoteService(rpyc.Service):
         """
         logger.info("Received remote set_alarm_state() to state: " + state_name)
         try:
-            State = getattr(sys.modules[__name__], state_name)
-            self.model.alarm_mode.set_state(State())
+            state = getattr(sys.modules[__name__], state_name)
+            AlarmModel.getInstance().alarm_mode.set_state(state())
         except:
             logger.warning("State is invalid: " + state_name)
 
@@ -230,400 +219,12 @@ class RemoteService(rpyc.Service):
         """ This method simply returns an AlarmModel string containing its current state.
         """
         logger.debug("Received remote get_model().")
-        return str(self.model)
+        return str(AlarmModel.getInstance())
 
 
-class AbstractState():
-    """ This class is the default behaviour of a state.  As per the name, it is meant to be abstract and
-    specialized.  Every state can transition to StateFire.  This behaviour is implemented by the AbstractState.
-    """
 
-    def __init__(self):
-        pass
 
-    model = None
 
-    def __str__(self):
-        return self.__class__.__name__
-
-    def handle_event(self, event_type, sensor):
-        """ This method handle the events for which the behaviour is common to every state.  It should be
-        called by the specialized state.
-        """
-        #Code that is common to all states.
-        if event_type == "fire" and not sensor.is_locked():
-            self.model.last_trig_sensor = sensor
-            self.model.last_trig_state = self
-            self.set_state(StateFire())
-
-    def set_state(self, state):
-        """ This method changes the alarm_mode of the AlarmModel.  It ensures the proper "Alarm Mode Update Model"
-        event is generated.
-        """
-        logger.info("------- Entering state " + str(state) + " -------")
-        self.model.last_alarm_mode = self.model.alarm_mode
-        self.model.alarm_mode = state
-        eventQ.put(
-            [dispatcher.send, {"signal": "Alarm Mode Update Model", "sender": dispatcher.Any}])
-
-
-class StateIdle(AbstractState):
-    """ This class is the state when the system is Idle.  This state can transition to StatePartiallyArmed
-    or StateArming.
-    """
-
-    def handle_event(self, event_type, sensor):
-        AbstractState.handle_event(self, event_type, sensor)
-        if event_type == "PIN":
-            self.model.set_grace_timer(self.model.arming_grace_time)
-            self.model.broadcast_message("Leave the house.")
-            self.set_state(StateArming())
-        elif event_type == "*":
-            # Sensors should be checked before changing to the PARMED state (we should not arm if a door is open)
-            if self.model.check_sensors_locked(StatePartiallyArmed()):
-                self.set_state(StatePartiallyArmed())
-            else:
-                self.model.broadcast_message("Not locked!")
-                logger.info("Sensor not locked when attempting to enter StatePartiallyArmed")
-
-
-class StatePartiallyArmed(AbstractState):
-    """ This class is the state when the system is not completely armed and meant to be used when occupants are in the
-    house.  This state can transition back to StateIdle when the PIN is entered or StateDisarming when an armed sensor
-    is triggered.
-    """
-
-    def handle_event(self, event_type, sensor):
-        AbstractState.handle_event(self, event_type, sensor)
-        if event_type == "PIN":
-            self.set_state(StateIdle())
-        elif event_type == "sensor":
-            if sensor.is_armed() and not sensor.is_locked():
-                self.model.last_trig_sensor = sensor
-                self.model.last_trig_state = self
-                if sensor.get_disarming_grace() == 0:
-                    self.set_state(StateAlert())
-                else:
-                    self.model.set_grace_timer(sensor.get_disarming_grace())
-                    self.set_state(StateDisarming())
-                    self.model.broadcast_message("Enter PIN")
-                    #self.model.set_grace_timer(self.model.disarming_grace_time)
-
-
-class StateArming(AbstractState):
-    """ This class is the state when the system is in transition to StateArmed.  It provides a delay for the occupants to
-    leave the house.  This state can transition back to StateIdle when the PIN is entered or StateArmed after the
-    grace period.
-    """
-
-    def handle_event(self, event_type, sensor):
-        AbstractState.handle_event(self, event_type, sensor)
-        if event_type == "PIN":
-            self.model.set_grace_timer(0)
-            self.set_state(StateIdle())
-        elif event_type == "tic":
-            self.model.set_grace_timer(self.model.grace_timer - 1)
-            if self.model.grace_timer <= 0:
-                if self.model.check_sensors_locked(StateArmed()):
-                    self.set_state(StateArmed())
-                else:
-                    self.model.broadcast_message("Armed failed!")
-                    self.set_state(StateIdle())
-
-
-class StateArmed(AbstractState):
-    """ This class is the state when the system fully armed and meant to be used when occupants are away from the
-    house.  This state can transition back to StateIdle when the PIN is entered (unlikely since you have to trigger a sensor to
-    enter the house) or StateDisarming when an armed sensor
-    is triggered.
-    """
-
-    def handle_event(self, event_type, sensor):
-        AbstractState.handle_event(self, event_type, sensor)
-        if event_type == "PIN":
-            self.set_state(StateIdle())
-        elif event_type == "sensor":
-            if sensor.is_armed() and not sensor.is_locked():
-                self.model.last_trig_sensor = sensor
-                self.model.last_trig_state = self
-                if sensor.get_disarming_grace() == 0:
-                    self.set_state(StateAlert())
-                else:
-                    self.model.set_grace_timer(sensor.get_disarming_grace())
-                    self.set_state(StateDisarming())
-                    self.model.broadcast_message("Enter PIN")
-            else:
-                pass
-                #Perhaps, it is misconfigured unless there is a situation where a sensor is only armed in PARMED?
-
-
-class StateDisarming(AbstractState):
-    """ This class is the state when the system is in transition to StateAlert.  This state can transition back to
-    StateIdle when the PIN is entered or StateAlert after the grace period.
-    """
-
-    def handle_event(self, event_type, sensor):
-        #This call has been removed to prevent the system to go in StateFire
-        #AbstractState.handle_event(self,event_type,sensor)
-        if event_type == "PIN":
-            self.model.set_grace_timer(0)
-            self.set_state(StateIdle())
-        elif event_type == "tic":
-            self.model.set_grace_timer(self.model.grace_timer - 1)
-            if self.model.grace_timer <= 0:
-                self.set_state(StateAlert())
-
-
-class StateAlert(AbstractState):
-    """ This class is the state when the system is the intrusion alert state.  This state can transition only transition
-    back to StateIdle when the PIN is entered.
-    """
-
-    def handle_event(self, event_type, sensor):
-        #This call has been removed to prevent the system to go in StateFire
-        #AbstractState.handle_event(self,event_type,sensor)
-        if event_type == "PIN":
-            self.set_state(StateIdle())
-
-
-class StateFire(AbstractState):
-    """ This class is the state when the system is the fire alert state.  This state can transition transition back to
-    StateIdle when the PIN is entered or when all fire sensors are locked.
-    """
-
-    def handle_event(self, event_type, sensor):
-        AbstractState.handle_event(self, event_type, sensor)
-        if event_type == "PIN":        # leaving StateFire if the PIN is typed
-            self.set_state(StateIdle())
-        elif event_type == "fire":    # leaving StateFire if there is no longer an unlocked fire detector
-            if self.model.check_sensors_locked(sensor_type="fire"):
-                self.set_state(StateIdle())
-
-
-class AlarmModel():
-    """ This class is the Model in the MVC pattern and contains all the info for
-    the alarm system. The model is not aware of any API and only communicates
-    updates via publishing.
-    """
-    alarm_mode = None
-
-    #------------------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary):
-        self.arming_grace_time = alarm_config_dictionary[
-            "arming grace delay"]  # this is the grace period for the system to arm
-        self.disarming_grace_time = alarm_config_dictionary[
-            "disarming grace delay"]  # this is the grace period for the system to go into alert mode
-        self.grace_timer = self.arming_grace_time
-
-        self.last_trig_sensor = None
-        self.last_trig_state = None
-
-        self.temp_c = "0.0"
-        self.wind_deg = 0
-        self.wind_dir = ""
-        self.wind_kph = 0.0
-
-        self.hours = 0
-        self.minutes = 0
-        self.seconds = 0
-        self.pin = alarm_config_dictionary["pin"]
-
-        self.fault_power = False
-        self.fault_network = False
-
-        self.input_string = ""
-        self.display_string = ""
-        self.last_message = ""
-
-        self.input_activity = 0
-        self.input_activity_setting = 4
-
-        self.sensor_list = []
-        self.reboot_string = alarm_config_dictionary["reboot"]
-
-        AbstractState.model = self
-        AbstractState().set_state(StateIdle())
-
-        logger.info("AlarmModel initialized")
-
-    def __str__(self):
-        model_string = "AlarmModel:\n"
-        model_string += "Current Time: {:0>2}:{:0>2}".format(self.hours, self.minutes) + "\n"
-        model_string += "Temperature: " + str(self.temp_c) + "\n"
-        model_string += "Wind direction: " + str(self.wind_dir) + " (" + str(self.wind_deg) + "deg) \n"
-        model_string += "Wind speed: " + str(self.wind_kph) + "\n"
-        model_string += "Current State: " + str(self.alarm_mode) + "\n"
-        model_string += "Last sensor triggered: " + str(self.last_trig_sensor) + " when in state: " + str(
-            self.last_trig_state) + "\n"
-        model_string += "Current Input String: " + self.input_string + "\n"
-        model_string += "Last broadcasted message: " + self.last_message + "\n"
-        model_string += "Power Fault: " + str(self.fault_power) + "\n"
-        model_string += "Network Fault: " + str(self.fault_network) + "\n"
-        model_string += self.print_sensors_state()
-
-        return model_string
-
-    #-------------------------------------------------------------------
-    def keypad_input(self, key):
-        if key == "":    # System tic
-            if self.input_activity > 0:
-                self.input_activity -= 1
-                if self.input_activity == 0:
-                    self.input_string = ""
-                    self.display_string = ""
-                    eventQ.put([dispatcher.send,
-                                {"signal": "Input String Update Model", "sender": dispatcher.Any,
-                                 "msg": self.display_string}])
-            return
-
-        self.input_activity = self.input_activity_setting
-
-        if key == "*" and self.input_string == self.reboot_string:
-            global terminate
-            terminate = True
-            eventQ.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
-            logger.warning("----- Reboot code entered. -----")
-        elif key == "*":
-            self.input_string = ""
-            self.display_string = ""
-            self.alarm_state_machine("*")
-
-        #elif key == "#" or len(self.input_string)> 8:
-        elif key == "#":
-            self.input_string = ""
-            self.display_string = ""
-        else:
-            if len(self.input_string) == len(self.pin):
-                self.input_string = self.input_string[1:]
-            else:
-                self.display_string += "*"
-            self.input_string += key
-
-        logger.debug("Input string: " + self.input_string)
-
-        eventQ.put([dispatcher.send,
-                    {"signal": "Input String Update Model", "sender": dispatcher.Any,
-                     "msg": self.display_string}])
-
-        if self.input_string == self.pin:
-            level = logger.info("PIN entered.")
-            self.broadcast_message("PIN entered.")
-            self.input_string = ""
-            self.display_string = ""
-            self.alarm_state_machine("PIN")
-
-    #-------------------------------------------------------------------
-    def alarm_state_machine(self, event_type, sensor=None):
-        self.alarm_mode.handle_event(event_type, sensor)
-
-    #-------------------------------------------------------------------
-    def arm_signal_handler(self, signal_number, frame):
-        logger.info("Received arming signal. Arming...")
-        self.alarm_mode.set_state(StateArmed)
-        signal.pause()
-
-    #-------------------------------------------------------------------
-    def set_grace_timer(self, t):
-        self.grace_timer = t
-        eventQ.put(
-            [dispatcher.send,
-             {"signal": "Grace Update Model", "sender": dispatcher.Any, "msg": self.grace_timer}])
-
-    #-------------------------------------------------------------------
-    def update_weather(self, temp_c, wind_deg, wind_kph):
-        self.temp_c = temp_c
-        self.wind_kph = wind_kph
-        self.wind_deg = wind_deg
-        if 23 <= wind_deg < 68:        #SOUTH_WEST
-            self.wind_dir = "SOUTH_WEST"
-        elif 68 <= wind_deg < 113:        #WEST
-            self.wind_dir = "WEST"
-        elif 113 <= wind_deg < 158:    #NORTH_WEST
-            self.wind_dir = "NORTH_WEST"
-        elif 158 <= wind_deg < 203:    #NORTH
-            self.wind_dir = "NORTH"
-        elif 203 <= wind_deg < 248:        #NORTH_EAST
-            self.wind_dir = "NORTH_EAST"
-        elif 248 <= wind_deg < 293:        #EAST
-            self.wind_dir = "EAST"
-        elif 293 <= wind_deg < 338:        #SOUTH_EAST
-            self.wind_dir = "SOUTH_EAST"
-        else:                            #SOUTH
-            self.wind_dir = "SOUTH"
-
-        eventQ.put([dispatcher.send, {"signal": "Weather Update Model", "sender": dispatcher.Any,
-                                      "msg": [self.temp_c, self.wind_dir, self.wind_kph]}])
-
-    def update_fault(self, msg):
-        logger.warning("Alarm Fault. msg=" + msg)
-        if msg == "onbattery":
-            self.fault_power = True
-            fault_type = "power"
-        elif msg == "offbattery":
-            self.fault_power = False
-            fault_type = "power"
-        elif msg == "internet_on":
-            self.fault_network = False
-            fault_type = "network"
-        elif msg == "internet_off":
-            self.fault_network = True
-            fault_type = "network"
-        else:
-            fault_type = "unknown"
-
-        eventQ.put([dispatcher.send,{"signal": "Fault Update Model", "sender": dispatcher.Any, "msg": fault_type}])
-
-    #-------------------------------------------------------------------
-    def update_time(self, h, m, s):
-        self.hours = h
-        self.minutes = m
-        self.seconds = s
-
-        self.keypad_input("")  # TODO review wtf???
-        self.alarm_state_machine("tic")
-
-        eventQ.put([dispatcher.send, {"signal": "Time Update Model", "sender": dispatcher.Any}])
-
-    #-------------------------------------------------------------------
-    def add_sensor(self, sensor):
-        """ Adds a sensor to the model."""
-        self.sensor_list.append(sensor)
-
-    #-------------------------------------------------------------------
-    def update_sensor(self, sensor):
-        if sensor.is_fire_type():
-            self.alarm_state_machine("fire", sensor)
-        else:
-            self.alarm_state_machine("sensor", sensor)
-        eventQ.put([dispatcher.send,
-                    {"signal": "Sensor Update Model", "sender": dispatcher.Any, "msg": sensor}])
-
-    def check_sensors_locked(self, state=None, sensor_type="intrusion"):
-        """ Verifies if all armed sensors are locked.
-        The verification is done in the current alarm_mode by default.
-        """
-        if state is None:
-            state = self.alarm_mode
-        for sensor in self.sensor_list:
-            if sensor.is_armed(state) and not sensor.is_locked():
-                if sensor_type == "fire":
-                    if sensor.is_fire_type():
-                        return False
-                else:
-                    return False
-        return True
-
-    def print_sensors_state(self):
-        """ Returns a string containing the current state of all sensors. """
-        sensor_state_string = ""
-        for sensor in self.sensor_list:
-            sensor_state_string += str(sensor) + "\n"
-        return sensor_state_string
-
-    def broadcast_message(self, msg):
-        self.last_message = msg
-        eventQ.put(
-            [dispatcher.send, {"signal": "Alarm Message", "sender": dispatcher.Any, "msg": msg}])
 
 ###################################################################################
 class AlarmController():
@@ -642,41 +243,40 @@ class AlarmController():
         alarm_config_dictionary = self.get_config()
 
         #create model (MVC pattern)
-        self.model = AlarmModel(alarm_config_dictionary)
-        self.script_path
+        AlarmModel.getInstance(alarm_config_dictionary)
         #create sensors
         self.sensor_map = alarm_config_dictionary["sensor_map"]
         GPIO.setmode(
             GPIO.BCM) #using pin numbering of the channel number on the Broadcom chip (ie. not the pin number on the connector)
         for sensor_config in self.sensor_map:
-            self.model.add_sensor(Sensor(self, sensor_config, dedicated_thread=True))
+            AlarmModel.getInstance().add_sensor(Sensor(self, sensor_config, dedicated_thread=True))
         logger.info("Sensors created")
 
         #create GPIOViews (sirens, light, etc)
         self.output_map = alarm_config_dictionary["output_map"]
         for output_config in self.output_map:
-            GPIOView(output_config, self.model)
+            GPIOView(output_config)
             pass
 
         #create View  (MVC pattern)
-        LCDView(alarm_config_dictionary, self.model)
-        SMSView(alarm_config_dictionary, self.model)
-        EmailView(alarm_config_dictionary, self.model)
+        LCDView(alarm_config_dictionary)
+        SMSView(alarm_config_dictionary)
+        EmailView(alarm_config_dictionary)
 
         if alarm_config_dictionary["speaker"] == "enable":
-            SoundPlayerView(alarm_config_dictionary, self.model, self.script_path)
+            SoundPlayerView(alarm_config_dictionary)
         if alarm_config_dictionary["piezo"] == "enable":
-            PiezoView(alarm_config_dictionary, self.model)
+            PiezoView(alarm_config_dictionary)
             pass
 
         #create scanners (threads that periodically poll things)
-        TimeScanner(self.model)
-        #SensorScanner(alarm_config_dictionary,self,self.model)  #Not required when the Sensors run each on a thread.
-        KeypadScanner(alarm_config_dictionary, self.model)
-        #StdScanner(alarm_config_dictionary,self.model)
-        WeatherScanner(alarm_config_dictionary, self.model)
-        NetworkMonitorScanner(self.model)
-        AlarmRemote(self.model) #create the Thread that serves as a remote controller
+        TimeScanner()
+        #SensorScanner(alarm_config_dictionary,self)  # Not required when the Sensors run each on a thread.
+        KeypadScanner(alarm_config_dictionary)
+        #StdScanner(alarm_config_dictionary)
+        WeatherScanner(alarm_config_dictionary)
+        NetworkMonitorScanner()
+        AlarmRemote() # create the Thread that serves as a remote controller
 
         logger.info("AlarmController started")
          
@@ -685,63 +285,66 @@ class AlarmController():
     def handle_reboot_request():
         global terminate
         terminate = True
-        eventQ.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
+        event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
         logger.warning("----- Reboot code entered. -----")
     
     def get_config(self):
         #read configuration file
-        self.script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
-        logger.info('script_path ' + self.script_path)
+        AlarmModel.getInstance().script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
+        logger.info('script_path ' + AlarmModel.getInstance().script_path)
 
         logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
         try:
-                alarm_config_file = open(self.script_path + "../../alarm_config.yaml", 'r')
-                alarm_config_dictionary = yaml.load(alarm_config_file)
-                logger.debug("YAML config file loaded succesfully")
-                return alarm_config_dictionary
+            alarm_config_file = open(AlarmModel.getInstance().script_path + "../../alarm_config.yaml", 'r')
+            alarm_config_dictionary = yaml.load(alarm_config_file)
+            logger.debug("YAML config file loaded succesfully")
+            return alarm_config_dictionary
         except:
             logger.warning("Error while reading YAML config file.", exc_info=True)
 
         logger.debug("----- Reverting to JSON config file (alarm_config.json) -----")
+
         try:
-            alarm_config_file = open(self.script_path + "../../alarm_config.json", 'r')
+            alarm_config_file = open(AlarmModel.getInstance().script_path + "../../alarm_config.json", 'r')
+            try:
+                alarm_config_dictionary = json.loads(alarm_config_file.read())
+                alarm_config_file.close()
+                return alarm_config_dictionary
+            except ValueError:
+                logger.warning("Error while reading JSON config file. Your alarm_config.json file seems to be corrupted...", exc_info=True)
         except:
-            logger.warning("could not open file : " + self.script_path + "../../alarm_config.json ...")
-        try:
-            alarm_config_dictionary = json.loads(alarm_config_file.read())
-            alarm_config_file.close()
-            return alarm_config_dictionary
-        except ValueError:
-            logger.warning("Error while reading JSON config file. Your alarm_config.json file seems to be corrupted...", exc_info=True)
-            exit
+            logger.warning("could not open file : " + AlarmModel.getInstance().script_path + "../../alarm_config.json ...")
+
+
 
     #--------------------------------------------------------------------------------
     def handle_keypad_input(self, msg):
-        if msg == "*" and self.model.input_string == self.reboot_string:
+        if msg == "*" and AlarmModel.getInstance().input_string == self.reboot_string:
             global terminate
             terminate = True
-            eventQ.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
+            event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
             logger.warning("----- Reboot code entered. -----")
         else:
-            self.model.keypad_input(msg)
+            AlarmModel.getInstance().keypad_input(msg)
 
-    def handle_update_fault(self, msg):
+    @staticmethod
+    def handle_update_fault(msg):
         logger.warning("Alarm Fault. msg=" + msg)
-        self.model.update_fault(msg)
+        AlarmModel.getInstance().update_fault(msg)
 
     #--------------------------------------------------------------------------------
-    def handle_sensor_handler(self, sensor):
-        self.model.update_sensor(sensor)
+    @staticmethod
+    def handle_sensor_handler(sensor):
+        AlarmModel.getInstance().update_sensor(sensor)
 
-#####################################################################################
+
 class KeypadScanner(Thread):
     """ This class will scan the keypad in its own thread """
     #--------------------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary, model):
+    def __init__(self, alarm_config_dictionary):
         """ Init the keypad scanner """
         Thread.__init__(self)
         self.daemon = True
-        self.model = model
         try:
             driver = alarm_config_dictionary["I2C_driver"]
             logger.debug("I2C_driver: " + driver)
@@ -767,7 +370,7 @@ class KeypadScanner(Thread):
             try:
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
-                    self.model.keypad_input(key)
+                    AlarmModel.getInstance().keypad_input(key)
                 time.sleep(0.1)
 
             except:
@@ -786,25 +389,24 @@ class Sensor(Thread):
         self.sensor_mutex = RLock()
 
         self.controller = controller
-        self.model = self.controller.model
         [self.pin, self.name, self.icon, self.pin_mode, period, self.normally_closed, self.sensor_type, armed_states,
          disarming_setting, self.play_sound] = config
 
         self.polling_period = period / 1000.0    #convert to seconds.
 
         if disarming_setting == 1:    #default value ("disarming grace delay")
-            self._disarming_grace = self.controller.model.disarming_grace_time
+            self._disarming_grace = AlarmModel.getInstance().disarming_grace_time
         else:
             self._disarming_grace = disarming_setting
 
         #Create a list of actual State classes
         self.armed_states = []
         self.armed_states_all = False
-        for statename in armed_states:
-            if statename == "ANY":
+        for state_name in armed_states:
+            if state_name == "ANY":
                 self.armed_states_all = True
             else:
-                self.armed_states.append(getattr(sys.modules[__name__], statename))
+                self.armed_states.append(getattr(sys.modules[__name__], state_name))
 
         #These variable just need to be initialized...
         self._current_reading = 0            #current valid sensor reading
@@ -834,12 +436,13 @@ class Sensor(Thread):
         except:
             logger.warning("Exception while setting a Sensor.", exc_info=True)
 
-        #GPIO.add_event_detect(int(self.pin), GPIO.BOTH,callback=self.handle_event, bouncetime=1000)	#events will be generated for both raising and falling edges
-        self._read_input() #initialize the value to the current reading
+        #GPIO.add_event_detect(int(self.pin), GPIO.BOTH,callback=self.handle_event, bouncetime=1000)
+        #events will be generated for both raising and falling edges
+        self._read_input()  # initialize the value to the current reading
 
     def run(self):
         logger.info("Started: " + str(self))
-        while (True):
+        while True:
             self._read_input()
             if self.has_changed():
                 if not self.is_locked():
@@ -884,18 +487,18 @@ class Sensor(Thread):
             return 1 - reading
         elif self.pin_mode == "PULLDOWN":
             return 1 - reading
-        return reading #assuming "PULLUP"
+        return reading  # assuming "PULLUP"
 
     def is_locked(self):
         if self.is_normally_closed():
             return 1 - self.get_reading()
-        else:    #normally_opened
+        else:    # normally_opened
             return self.get_reading()
 
     def is_armed(self, state=None):
         # state: by default, it looks at the current state of the model.
-        if state == None:
-            state = self.model.alarm_mode
+        if state is None:
+            state = AlarmModel.getInstance().alarm_mode
 
         # if this sensor is always armed (eg. Smoke Detector)
         if self.armed_states_all:
@@ -907,7 +510,7 @@ class Sensor(Thread):
         return False
 
     def is_normally_closed(self):
-        return (self.normally_closed == "normally_closed")
+        return self.normally_closed == "normally_closed"
 
     def is_fire_type(self):
         return self.sensor_type == "type_fire"
@@ -920,13 +523,13 @@ class SensorScanner(Thread):
     """ This class will scan the sensors in its own thread
     """
     #------------------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary, controller, model):
+    def __init__(self, alarm_config_dictionary, controller):
         # Init the sensor scanner
         Thread.__init__(self)
         self.daemon = True
 
         self.controller = controller
-        self.sensors = model.sensor_list
+        self.sensors = AlarmModel.getInstance().sensor_list
 
         self.start()    # start the thread
 
@@ -934,7 +537,7 @@ class SensorScanner(Thread):
     def run(self):
         # Run the sensor scanner
         logger.info("SensorScanner started")
-        while (True):
+        while True:
             for sensor in self.sensors:
                 if sensor.has_changed():
                     logger.debug("Changed: " + str(sensor))
@@ -942,62 +545,11 @@ class SensorScanner(Thread):
             time.sleep(.3)
 
 
-"""	Original Code
-#####################################################################################
-class SensorScanner(Thread):
-	# This class will scan the sensors in its own thread 
-	#------------------------------------------------------------------------------
-	def __init__(self,alarm_config_dictionary):
-		# Init the sensor scanner 
-		Thread.__init__(self)
-		self.daemon = True
-		self.closed,self.open  = range(2)
-
-		#initialize state of each pin
-		self.sensor_state = alarm_config_dictionary["sensor_map"].copy()
-		self.sensor_map = alarm_config_dictionary["sensor_map"].copy()
-		
-		for pin,state in self.sensor_state.iteritems():   
-			self.sensor_state[pin] = 3
-
-		GPIO.setmode(GPIO.BCM) #using pin numbering of the channel number on the Broadcom chip (ie. not the pin number on the connector) 
-		self.gpio_setup()
-
-		self.start()	# start the thread
-		
-	#------------------------------------------------------------------------------
-	def gpio_setup(self):
-		
-		for sensor_config in self.sensor_map.iteritems():
-			Sensor(sensor_config)
-
-			
-	#------------------------------------------------------------------------------
-	def run(self):
-		# Run the sensor scanner 
-		print("SensorScanner started")
-		while(True):
-			for pin,[sensor_name,position,pin_mode] in self.sensor_map.iteritems():
-				_current_reading = GPIO.input(int(pin))
-				if pin_mode == "PULLUP":
-					pass
-				elif pin_mode == "FLOATING":
-					_current_reading = 1 - _current_reading
-				elif pin_mode == "PULLDOWN":
-					_current_reading = 1 - _current_reading
-				
-				if not _current_reading == self.sensor_state[pin]:
-					self.sensor_state[pin] = _current_reading
-					eventQ.put([dispatcher.send,{"signal":"Sensor Changed", "sender":dispatcher.Any, "msg":[pin,self.sensor_state[pin]]}])						  
-			time.sleep(0.2)
-"""
-
-###################################################################################
 class SoundPlayerView():
     """ This class is responsible to play_notes the sounds. And for most bugs"""
 
     #------------------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary, model, script_path):
+    def __init__(self, alarm_config_dictionary):
         self.alarm_config = alarm_config_dictionary.copy()
         try:
             logger.debug("button_wav: " + self.alarm_config["button_wav"])
@@ -1008,8 +560,7 @@ class SoundPlayerView():
             logger.info("SoundPlayerView cannot be configured properly. ", exc_info=True)
             return
 
-        self.model = model
-        self.script_path = script_path
+        self.script_path = AlarmModel.getInstance().script_path
 
         self.lock = threading.RLock()
 
@@ -1040,17 +591,17 @@ class SoundPlayerView():
             self.play_notes("grace_beeps3")
 
     def play_alarm_mode(self):
-        self.alarm_mode = self.model.alarm_mode
+        alarm_mode = AlarmModel.getInstance().alarm_mode
         logger.debug("play_alarm_mode")
-        if isinstance(self.alarm_mode, StateIdle):
+        if isinstance(alarm_mode, StateIdle):
             try:
                 with self.lock:
-                    if isinstance(self.model.last_alarm_mode, StateAlert):
+                    if isinstance(AlarmModel.getInstance().last_alarm_mode, StateAlert):
                         subprocess.call("ps x | grep '[a]play_notes' | awk '{ print $1 }' | xargs kill", shell=True)
                     self.play_notes("grace_beeps3")
             except:
                 logger.warning("Error when trying to kill aplay process", exc_info=True)
-        elif isinstance(self.alarm_mode, StateAlert):
+        elif isinstance(alarm_mode, StateAlert):
             self.play_notes("alarm_wav")
 
     def play_pin(self, msg):
@@ -1058,7 +609,7 @@ class SoundPlayerView():
 
     def play_notes(self, string):
         with self.lock:                      # Begin critical section
-            subprocess.Popen(['aplay', '-q', self.script_path + self.alarm_config[string]])
+            subprocess.Popen(['aplay', '-q', AlarmModel.getInstance().script_path + self.alarm_config[string]])
 
 ###################################################################################
 buzzQ = Queue()
@@ -1067,13 +618,11 @@ buzzQ = Queue()
 class PiezoView():
     """ This class is responsible to play_notes the sounds. And for most bugs"""
     #------------------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary, model):
+    def __init__(self, alarm_config_dictionary):
         self.alarm_config = alarm_config_dictionary.copy()
 
-        self.model = model
-
         """subscribe to several topics of interest (model)"""
-        dispatcher.connect(self.alarm_mode, signal="Alarm Mode Update Model",
+        dispatcher.connect(self.alarm_mode_change, signal="Alarm Mode Update Model",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.key, signal="Input String Update Model", sender=dispatcher.Any, weak=False)
         #dispatcher.connect( self.grace_timer, signal="Grace Update Model", sender=dispatcher.Any, weak=False)
@@ -1110,22 +659,22 @@ class PiezoView():
         else:
             self.player.next([self.player.play_notes, {"string": [[880, 50, 0.1]]}])
 
-    def alarm_mode(self):
-        self.alarm_mode = self.model.alarm_mode
+    def alarm_mode_change(self):
+        alarm_mode = AlarmModel.getInstance().alarm_mode
         logger.debug("play_alarm_mode")
 
         self.player.next([self.player.stop, {}])
 
-        if isinstance(self.alarm_mode, StateAlert):
+        if isinstance(alarm_mode, StateAlert):
             self.player.next([self.player.play_siren, {}])
-        elif isinstance(self.alarm_mode, StateArming):
+        elif isinstance(alarm_mode, StateArming):
             self.player.next([self.player.play_continuously, {"string": [[200, 50, 0.1], [200, 0, 0.9]]}])
-        elif isinstance(self.alarm_mode, StateDisarming):
+        elif isinstance(alarm_mode, StateDisarming):
             self.player.next([self.player.play_continuously, {"string": [[2200, 50, 0.4], [2200, 0, 0.1]]}])
-        elif isinstance(self.alarm_mode, StateIdle):
+        elif isinstance(alarm_mode, StateIdle):
             self.player.next(
                 [self.player.play_notes, {"string": [[440, 50, 0.1], [440, 0, 0.05], [440, 50, 0.1], [440, 0, 0]]}])
-        elif isinstance(self.alarm_mode, StatePartiallyArmed):
+        elif isinstance(alarm_mode, StatePartiallyArmed):
             self.player.next([self.player.play_notes, {
                 "string": [[440, 50, 0.1], [440, 0, 0.05], [503, 50, 0.1], [503, 0, 0.05], [566, 50, 0.1],
                            [566, 0, 0]]}])
@@ -1140,9 +689,10 @@ class BuzzPlayer(Thread):
         self.daemon = True
 
         self.buzzer = buzzer
+        self.is_continuous = True
 
         self.default_string = [[200, 0, 0.05]]
-
+        self.continuous_string = self.default_string
         self.stop()
         self.buzzer.start(0)
 
@@ -1166,19 +716,19 @@ class BuzzPlayer(Thread):
             self.buzzer.ChangeDutyCycle(dc)
             time.sleep(d)
 
-    def play_continuously(self, string):
-        logger.debug("BuzzPlayer play_continuously() string: " + str(string))
+    def play_continuously(self, notes_string):
+        logger.debug("BuzzPlayer play_continuously() string: " + str(notes_string))
         self.is_continuous = True
-        self.continuous_string = string
+        self.continuous_string = notes_string
 
     def play_siren(self):
         logger.debug("BuzzPlayer play_siren()")
-        string = []
+        notes_string = []
         for y in range(0, 8000, 400):
-            string.append([2500 + y, 50, 0.05])
+            notes_string.append([2500 + y, 50, 0.05])
             #for y in range(0, 8000,400):
-        #	string.append([10500-y,50,0.05])
-        self.play_continuously(self, string)
+        #	notes_string.append([10500-y,50,0.05])
+        self.play_continuously(notes_string)
 
     def stop(self):
         logger.debug("BuzzPlayer stop()")
@@ -1186,15 +736,14 @@ class BuzzPlayer(Thread):
         self.continuous_string = self.default_string
         self.play_notes(self.continuous_string)
 
-###################################################################################
+
 class LCDView():
-    def __init__(self, alarm_config_dictionary, model):
+    def __init__(self, alarm_config_dictionary):
         try:
             driver = alarm_config_dictionary["I2C_driver"]
         except:
             logger.info("I2C_driver not found in configuration")
             return
-        self.model = model
 
         if driver == "I2CLCD":
             self.driver = I2CLCD
@@ -1237,8 +786,7 @@ class LCDView():
 
         #This is not elegant.  This table works for both I2CLCD and I2CBV4618. It should be dynamic...
 
-
-        self.LCD_template = ( '######################\n' +
+        self.lcd_template = ( '######################\n' +
                               '#                    #\n' +
                               '#                    #\n' +
                               '#                    #\n' +
@@ -1310,7 +858,7 @@ class LCDView():
             self.update_weather("")
             self.update_time()
             self.update_alarm_mode()
-            self.update_msg(self.model.last_message)
+            self.update_msg(AlarmModel.getInstance().last_message)
             logger.debug("LCD updating current display completed.")
 
             logger.info("LCD initialized")
@@ -1356,11 +904,11 @@ class LCDView():
         start_char = 23 * row + col
         end_char = start_char + len(temp_s)
 
-        self.LCD_template = self.LCD_template[:start_char] + temp_s + self.LCD_template[end_char:]
+        self.lcd_template = self.lcd_template[:start_char] + temp_s + self.lcd_template[end_char:]
 
     def update_ui_file(self, signalnumber, frame):
         with open(self.ui_file_path + "ui_file", 'w') as ui_file:
-            ui_file.write(self.LCD_template)
+            ui_file.write(self.lcd_template)
         signal.pause()
 
     #-------------------------------------------------------------------
@@ -1404,7 +952,7 @@ class LCDView():
 
     #-------------------------------------------------------------------
     def update_grace_timer(self, msg):
-        timer = self.model.grace_timer
+        timer = AlarmModel.getInstance().grace_timer
         if timer <= 0:
             timer_string = "   "
         else:
@@ -1413,14 +961,14 @@ class LCDView():
 
     #-------------------------------------------------------------------
     def draw_sensors(self):
-        for sensor in self.model.sensor_list:
+        for sensor in AlarmModel.getInstance().sensor_list:
             self.update_sensor_state(sensor)
 
     #-------------------------------------------------------------------
     def update_sensor_state(self, msg):
         sensor = msg
         [row, col] = self.sensor_cursor_start
-        col = col + self.model.sensor_list.index(sensor)
+        col = col + AlarmModel.getInstance().sensor_list.index(sensor)
         #Displays the icon when it is unlocked
         if sensor.is_locked():
             sensor_string = " "
@@ -1433,8 +981,8 @@ class LCDView():
 
     #-------------------------------------------------------------------
     def update_weather(self, msg):
-        [temp, wind_dir, wind_kph] = [self.model.temp_c, self.model.wind_dir, self.model.wind_kph]
-        self.wind_dir_arrow(self.model.wind_dir)
+        [temp, wind_dir, wind_kph] = [AlarmModel.getInstance().temp_c, AlarmModel.getInstance().wind_dir, AlarmModel.getInstance().wind_kph]
+        self.wind_dir_arrow(AlarmModel.getInstance().wind_dir)
         #weather_string = "{:>3}".format(int(round(float(temp),0)))+chr(self.get_char("deg"))+ "C" +chr(self.get_char("arrow"))+"{:>2.0f}".format(wind_kph)+"kh"
         weather_string = "{:>3}".format(int(round(float(temp), 0))) + self.get_char("deg") + "C" + self.get_char(
             "arrow") + "{:>2.0f}".format(wind_kph) + "kh"
@@ -1443,7 +991,7 @@ class LCDView():
 
     #-------------------------------------------------------------------
     def update_time(self):
-        [h, m, s] = [self.model.hours, self.model.minutes, self.model.seconds]
+        [h, m, s] = [AlarmModel.getInstance().hours, AlarmModel.getInstance().minutes, AlarmModel.getInstance().seconds]
         time_string = "{:0>2}:{:0>2}".format(h, m) + " "
         self.send_to_lcd(self.time_cursor_start, time_string)
 
@@ -1479,12 +1027,12 @@ class LCDView():
 
     def update_fault(self, msg):
         string = ""
-        if self.model.fault_power:
+        if AlarmModel.getInstance().fault_power:
             string += "!"
         else:
             string += " "
 
-        if self.model.fault_network:
+        if AlarmModel.getInstance().fault_network:
             string += "@"
         else:
             string += " "
@@ -1495,7 +1043,7 @@ class LCDView():
 
     #-------------------------------------------------------------------
     def update_alarm_mode(self):
-        alarm_mode = self.model.alarm_mode
+        alarm_mode = AlarmModel.getInstance().alarm_mode
         if isinstance(alarm_mode, StateArmed):
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  AWAY'
@@ -1519,7 +1067,7 @@ class LCDView():
             status_str = '  FIRE'
         logger.debug("LCDView changing state to: " + status_str)
         self.send_to_lcd(self.alarm_mode_cursor_start, status_str)
-        self.update_PIN(self.model.input_string)
+        self.update_PIN(AlarmModel.getInstance().input_string)
 
     #-------------------------------------------------------------------
     def wind_dir_arrow(self, wind_deg):
@@ -1585,7 +1133,7 @@ class StdScanner(Thread):
         while not terminate:
             try:
                 key = self.get_key()
-                eventQ.put([dispatcher.send,
+                event_q.put([dispatcher.send,
                             {"signal": "Button Pressed", "sender": dispatcher.Any, "msg": key}])
             except IOError:
                 pass
@@ -1606,7 +1154,7 @@ class StdScanner(Thread):
 """
 class StdView():
 	def __init__(self,alarm_config_dictionary,model):
-		self.model = model
+		AlarmModel.getInstance() = model
 		
 		dispatcher.connect( self.update_weather, signal="Weather Update Model", sender=dispatcher.Any ,weak=False)
 		dispatcher.connect( self.update_time, signal="Time Update Model", sender=dispatcher.Any ,weak=False)
@@ -1629,7 +1177,7 @@ class StdView():
 	
 	#-------------------------------------------------------------------
 	def update_grace_timer(self,msg):
-		timer = self.model.grace_timer
+		timer = AlarmModel.getInstance().grace_timer
 		if timer <= 0:
 			timer_string = "   "
 		else:
@@ -1638,14 +1186,14 @@ class StdView():
 
 	#-------------------------------------------------------------------
 	def draw_sensors(self):
-		for sensor in self.model.sensor_list:
+		for sensor in AlarmModel.getInstance().sensor_list:
 			self.update_sensor_state(sensor)
 
 	#-------------------------------------------------------------------
 	def update_sensor_state(self,msg):
 		sensor=msg
 		[row,col]=self.sensor_cursor_start
-		col=col+self.model.sensor_list.index(sensor)
+		col=col+AlarmModel.getInstance().sensor_list.index(sensor)
 		#Displays the icon when it is unlocked
 		if sensor.is_locked():
 			sensor_string = " "
@@ -1658,7 +1206,7 @@ class StdView():
 	#-------------------------------------------------------------------
 	def update_weather(self,msg):
 	
-		[temp,wind_dir,wind_kph] = [self.model.temp_C,self.model.wind_dir,self.model.wind_kph]
+		[temp,wind_dir,wind_kph] = [AlarmModel.getInstance().temp_C,AlarmModel.getInstance().wind_dir,AlarmModel.getInstance().wind_kph]
 		self.wind_dir_arrow(wind_dir)
 		#weather_string = "{:>3}".format(int(round(float(temp),0)))+chr(self.get_char("deg"))+ "C" +chr(self.get_char("arrow"))+"{:>2.0f}".format(wind_kph)+"kh"
 		weather_string = "{:>3}".format(int(round(float(temp),0)))+self.get_char("deg")+ "C" +self.get_char("arrow")+"{:>2.0f}".format(wind_kph)+"kh"
@@ -1667,7 +1215,7 @@ class StdView():
 
 	#-------------------------------------------------------------------
 	def update_time(self):
-		[h,m,s] = [self.model.hours,self.model.minutes,self.model.seconds]
+		[h,m,s] = [AlarmModel.getInstance().hours,AlarmModel.getInstance().minutes,AlarmModel.getInstance().seconds]
 		time_string = "{:0>2}:{:0>2}".format(h,m) + " "
 		self.send_to_lcd(self.time_cursor_start,time_string)
 		self.backlight_timer_decrease()
@@ -1709,7 +1257,7 @@ class StdView():
 	
 	#-------------------------------------------------------------------
 	def update_alarm_mode(self):
-		alarm_mode = self.model.alarm_mode
+		alarm_mode = AlarmModel.getInstance().alarm_mode
 		if isinstance(alarm_mode, StateArmed):
 			self.backlight_timer_active(timerActive=True)
 			status_str='  AWAY'
@@ -1732,17 +1280,17 @@ class StdView():
 			self.backlight_timer_active(timerActive=False)
 			status_str='  FIRE'
 		self.send_to_lcd(self.alarm_mode_cursor_start,status_str)
-		self.update_PIN(self.model.input_string)
+		self.update_PIN(AlarmModel.getInstance().input_string)
 """
 
-calendarQ = Queue()
+calendar_Q = Queue()
 ###################################################################################
 class SMSView():
     #-------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary, model):
-        self.model = model
+    def __init__(self, alarm_config_dictionary):
 
-        self.seq = 0    #sequence number used to refer to the event.  This is because the SMSView and SMSSender are on 2 threads.
+        self.seq = 0    # sequence number used to refer to the event.  This is because the SMSView and SMSSender are on
+                        # 2 threads.
 
         self.last_alarm_mode_event = None
         self.last_fault_event = None
@@ -1759,27 +1307,30 @@ class SMSView():
 
     def update_alarm_mode(self):
         #Update the end time of an existing event.
-        if (not self.last_alarm_mode_event == None) and isinstance(self.model.alarm_mode, StateIdle):
+        if (not self.last_alarm_mode_event is None) and isinstance(AlarmModel.getInstance().alarm_mode, StateIdle):
             self.update_event_end_time(self.last_alarm_mode_event)
             self.last_alarm_mode_event = None
 
-        if isinstance(self.model.alarm_mode, StateAlert):
+        if isinstance(AlarmModel.getInstance().alarm_mode, StateAlert):
             self.last_alarm_mode_event = self.insert_event("RPI Intrusion",
-                                                           "System in Alert state\nSensor triggered: " + self.model.last_trig_sensor.name + " while in state " + str(
-                                                               self.model.last_trig_state)) #sends sms
-        elif isinstance(self.model.alarm_mode, StateFire):
+                                                           "System in Alert state\nSensor triggered: " +
+                                                           AlarmModel.getInstance().last_trig_sensor.name +
+                                                           " while in state " +
+                                                           str(AlarmModel.getInstance().last_trig_state))  # sends sms
+        elif isinstance(AlarmModel.getInstance().alarm_mode, StateFire):
             self.last_alarm_mode_event = self.insert_event("RPI Fire",
-                                                           "System in Fire state\nFire detector triggered while in state " + str(
-                                                               self.model.last_trig_state)) #sends sms
+                                                           "System in Fire state\n"
+                                                           "Fire detector triggered while in state " +
+                                                           str(AlarmModel.getInstance().last_trig_state))  # sends sms
 
     def update_fault(self, msg):
         #We only do something with Power Faults.
-        if (msg == "power"):
-            if self.model.fault_power:
-                self.last_fault_event = self.insert_event("RPI_Power_Fault", "APCUPS on battery.") #sends sms
+        if msg == "power":
+            if AlarmModel.getInstance().fault_power:
+                self.last_fault_event = self.insert_event("RPI_Power_Fault", "APCUPS on battery.")  # sends sms
             else:
                 #Update the end time of an existing event.
-                if not self.last_fault_event == None:
+                if not self.last_fault_event is None:
                     self.update_event_end_time(self.last_fault_event)
                     self.last_fault_event = None
 
@@ -1800,12 +1351,12 @@ class SMSView():
         when.reminder.append(reminder)
         event.when.append(when)
 
-        calendarQ.put([self.seq, event])
+        calendar_Q.put([self.seq, event])
         return self.seq
 
     def update_event_end_time(self, seq):
         logger.info("SMSView update requested on event: " + str(seq))
-        calendarQ.put([seq, None])
+        calendar_Q.put([seq, None])
 
 
 class SMSSender(Thread):
@@ -1814,8 +1365,8 @@ class SMSSender(Thread):
         Thread.__init__(self)
         self.daemon = True
         try:
-            self.UserName = alarm_config_dictionary["google_username"]
-            self.Password = alarm_config_dictionary["google_password"]
+            self.user_name = alarm_config_dictionary["google_username"]
+            self.google_password = alarm_config_dictionary["google_password"]
 
             self.calurl = ""
             try:
@@ -1833,13 +1384,13 @@ class SMSSender(Thread):
     #-------------------------------------------------------------------
     def run(self):
         logger.info("SMSSender started")
-        while (True):
-            [seq, an_event] = calendarQ.get()
+        while True:
+            [seq, an_event] = calendar_Q.get()
             action_completed = False
-            while (not action_completed):
+            while not action_completed:
                 if network_is_alive:
                     try:
-                        if an_event == None:
+                        if an_event is None:
                             logger.info("SMSSender updating event sequence " + str(seq))
                             self.update_endtime(self.event_dict[seq])
                             del self.event_dict[seq]
@@ -1856,8 +1407,8 @@ class SMSSender(Thread):
 
     def logon(self):
         self.cs = gdata.calendar.service.CalendarService()
-        self.cs.email = self.UserName
-        self.cs.password = self.Password
+        self.cs.email = self.user_name
+        self.cs.password = self.google_password
 
         self.cs.source = "Google-Calendar-SMS-5.0_" + str(random.randint(0, 10000))
         self.cs.ProgrammaticLogin()
@@ -1953,10 +1504,10 @@ class SMSSender(Thread):
 
 
 emailQ = Queue()
-###################################################################################
+
+
 class EmailView():
-    def __init__(self, alarm_config_dictionary, model):
-        self.model = model
+    def __init__(self, alarm_config_dictionary):
 
         if (EmailSender(alarm_config_dictionary)).isAlive():
             dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
@@ -1969,20 +1520,20 @@ class EmailView():
             logger.warning("EmailView not created properly.")
 
     def update_alarm_mode(self):
-        if isinstance(self.model.alarm_mode, StateAlert):
+        if isinstance(AlarmModel.getInstance().alarm_mode, StateAlert):
             self.create_email("RPI_Intrusion",
-                              "Sensor triggered: " + self.model.last_trig_sensor.name + " while in state " + str(
-                                  self.model.last_trig_state)) #sends sms
-        elif isinstance(self.model.alarm_mode, StateFire):
+                              "Sensor triggered: " + AlarmModel.getInstance().last_trig_sensor.name + " while in state " + str(
+                                  AlarmModel.getInstance().last_trig_state)) #sends sms
+        elif isinstance(AlarmModel.getInstance().alarm_mode, StateFire):
             self.create_email("RPI_Fire",
-                              "Fire detector triggered while in state " + str(self.model.last_trig_state)) #sends sms
-        elif isinstance(self.model.alarm_mode, StateIdle):
-            if isinstance(self.model.last_alarm_mode, StateFire):
+                              "Fire detector triggered while in state " + str(AlarmModel.getInstance().last_trig_state)) #sends sms
+        elif isinstance(AlarmModel.getInstance().alarm_mode, StateIdle):
+            if isinstance(AlarmModel.getInstance().last_alarm_mode, StateFire):
                 self.create_email("RPI_Fire", "Fire alarm off.") #sends sms
 
     def update_fault(self, msg):
         if (msg == "power"):
-            if self.model.fault_power:
+            if AlarmModel.getInstance().fault_power:
                 self.create_email("RPI_Power_Fault", "APCUPS on battery.") #sends sms
             else:
                 self.create_email("RPI_Power_Recovered", "APCUPS off battery.") #sends sms
@@ -2041,8 +1592,7 @@ class EmailSender(Thread):
 ###################################################################################		
 class GPIOView():
     #-------------------------------------------------------------------
-    def __init__(self, output_config, model):
-        self.model = model
+    def __init__(self, output_config):
 
         [self.pin, self.name, normal_pin_value, states_on, states_from] = output_config
 
@@ -2075,8 +1625,8 @@ class GPIOView():
         logger.info("GPIOView (" + self.name + ") created")
 
     def update_alarm_mode(self):
-        if (self.model.alarm_mode.__class__ in self.states_on) and self.is_active_from_state(
-                self.model.last_trig_state.__class__):
+        if (AlarmModel.getInstance().alarm_mode.__class__ in self.states_on) and self.is_active_from_state(
+                AlarmModel.getInstance().last_trig_state.__class__):
             if GPIO.input(self.pin) == self.normal_pin_value:
                 logger.info("Output turned on: " + self.name)
                 self.active = True
@@ -2092,35 +1642,7 @@ class GPIOView():
             return True
         return state in self.states_from
 
-###################################################################################		
-class EventSerializer(Thread):
-    """ This serializes send events to ensure thread safety """
-    #------------------------------------------------------------------------------
-    def __init__(self):
-        """ Init the event serializer """
-        Thread.__init__(self)
-        self.daemon = True
-        self.start()
-        logger.info("Event_Serializer started")
-
-    def run(self):
-        while True:
-            try:
-                [func, kwargs] = eventQ.get()
-                try:
-                    log_level = signal_log_level_dict[kwargs["signal"]]
-                    logger.log(log_level, "Event serializer sending signal: " + kwargs["signal"])
-                except:
-                    log_level = logging.NOTSET
-                for key, value in kwargs.iteritems():
-                    if not (log_level == logging.NOTSET):
-                        if not (key == "signal") and not (key == "sender"):
-                            logger.log(log_level, "Argument " + str(key) + " : " + str(value))
-                func(**kwargs)
-            except:
-                logger.warning("Exception while dispatching an event.", exc_info=True)
-
-################################################################################### 
+###################################################################################
 # Run the program
 if __name__ == "__main__":
     global terminate
@@ -2129,6 +1651,7 @@ if __name__ == "__main__":
     GPIO.setwarnings(False)
 
     # create logger
+    print "Starting logger"
     try:
         logging.config.fileConfig('logging.conf')
         logger = logging.getLogger('alarm')
@@ -2143,7 +1666,7 @@ if __name__ == "__main__":
     logger.debug("Starting AlarmController")
     AlarmController()
     logger.debug("Starting Event Serializer")
-    EventSerializer()
+    EventSerializer.getInstance()
     logger.info("----- Initialization complete -----")
 
     while threading.active_count() > 0 and not terminate:
