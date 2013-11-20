@@ -15,36 +15,49 @@
 echo "init.d script"
 # Carry out specific functions when asked to by the system
 statusfunction(){
-	#pkill -SIGUSR1 -f alarm_system
-	#echo $?
-	#cat /home/pi/Python/RPIHomeAlarmSystem/rpihomealarmsystem/ui_file
 	python /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_remote.py -p
-	
+}
+
+is_running(){
+    if ps aux | grep "[a]larm_system"
+    then
+        return 0
+    else
+        return 1
+    fi
 }
 
 starting(){
-	echo "verifying if user alarm_config.json exists in user home directory"
-	if [ -e /home/pi/alarm_config.json ]; then
-		echo "user alarm_config.json file was found"
+	echo "verifying if user alarm_config is in user home directory"
+	if [ -e /mnt/dropbox/Workspace/alarm_config.yaml ]; then
+		echo "user alarm_config.yaml file was found"
 	else
-		exit 1
-	fi
+        if [ -e /home/pi/alarm_config.json ]; then
+            echo "user alarm_config.json file was found"
+        else
+            exit 1
+        fi
+    fi
 
 	# Check if alarm_system is running
-	if ps aux | grep "[p]ython -u alarm_system"
+	if is_running
 	then
 		echo "Already running..."
 	else
 		echo "Starting alarmSystem"
-		#cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
-		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>&1 2>&1 &
+		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
 	fi
 }
 
 stopping(){
     # kill application you want to stop
-    echo "killing other alarm processes"
-	pkill -f alarm_system
+    if is_running
+    then
+        echo "killing other alarm processes"
+	    pkill -f alarm_system
+	else
+	    echo "alarmSystem not running"
+	fi
 }
 
 updating(){
@@ -55,6 +68,9 @@ updating(){
 	mount -a
 	rsync -av --delete /mnt/dropbox/Workspace/RPIHomeAlarmSystem /home/pi/
 
+    if [ -e /mnt/dropbox/Workspace/alarm_config.yaml ]; then
+		rsync -av --delete /mnt/dropbox/Workspace/alarm_config.yaml /home/pi/alarm_config.yaml
+	fi
 	if [ -e /mnt/dropbox/Workspace/alarm_config.json ]; then
 		rsync -av --delete /mnt/dropbox/Workspace/alarm_config.json /home/pi/alarm_config.json
 	fi
@@ -65,9 +81,15 @@ case "$1" in
 	starting
     ;;
   update)
-    stopping
-    updating
-    starting
+    if is_running
+	then
+	    stopping
+	    updating
+	    starting
+	else
+	    updating
+	fi
+
     ;;
   stop)
 	stopping
@@ -80,12 +102,15 @@ case "$1" in
 	statusfunction
 	;;
   arm)
-	#pkill -SIGUSR2 -f alarm_system
 	python /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_remote.py -s StateArmed
 	statusfunction
 	;;
+  dearm)
+    python /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_remote.py -s StateIdle
+    statusfunction
+	;;
   *)
-    echo "Usage: /etc/init.d/alarmSystem {start|stop|restart|update|status|arm}"
+    echo "Usage: /etc/init.d/alarmSystem {start|stop|restart|update|status|arm|dearm}"
     exit 1
     ;;
 esac

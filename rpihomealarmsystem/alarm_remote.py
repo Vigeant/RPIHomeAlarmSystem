@@ -32,7 +32,7 @@ def main(argv):
 
     if (not signal == "" and not msg == ""):
         c = rpyc.connect("localhost", 18861)
-        c.root.insert_event(signal, msg)
+        c.root.exposed_create_event(signal, msg)
 
 # Run the program
 if __name__ == "__main__":

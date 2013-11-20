@@ -1,0 +1,137 @@
+# YAML
+#I2C_driver. Currently supported: I2CLCD or I2CBV4618
+I2C_driver: I2CLCD
+
+#lcd_backlight_timer. Delay in sec before the backlight is turned off.  0 to disable (always on).
+lcd_backlight_timer: 30
+
+#arming grace delay. Delay in seconds.
+arming grace delay: 60
+#disarming grace delay. Delay in seconds.
+disarming grace delay: 30
+
+#pin. Code sequence to arm/de-arm the system. Number of digits is flexible.
+pin: 1234
+#reboot. Code sequence (followed by *) to reboot the system.  Number of digits has to be the same as the pin.
+reboot: 1111
+
+#sensor_map.  Each set in the map are as follows:
+#Pin number (GPIO BCM pin number)
+#Sensor Name
+#Symbol name.  Symbol name as to match a symbol in lcd_custom_chars. Alternatively, enter only one character to use directly if no symbol exists.  This symbol is used on the LCD.
+#Pin mode. PULLUP, PULLDOWN, or FLOATING
+#Polling period in millisecond.  The value of the sensor has to be the same 2 readings in a row to be accepted (for debouncing purposes.)
+#normally_closed or normally_opened
+#Sensor type. type_intrusion or type_fire
+#List of states in which the sensor is armed. ANY if the sensor is always armed.
+#disarming grace when armed. (0: disable the grace period, 1: default ("disarming grace delay"), or delay in seconds).
+#Play a sound what the sensor state changes. (play_sound or no_sound)
+
+sensor_map: [
+    [22,
+        "DOOR",
+        "door",
+        "PULLUP",
+        300,
+        "normally_closed",
+        "type_intrusion",
+        ["StatePartiallyArmed","StateArmed"],
+        1,
+        "play_sound"
+    ],
+    [17,
+        "PATIO",
+        "patio",
+        "PULLUP",
+        300,
+        "normally_closed",
+        "type_intrusion",
+        ["StatePartiallyArmed","StateArmed"],
+        1,
+        "play_sound"
+    ],
+    [23,
+        "Motion1",
+        "camera",
+        "FLOATING",
+        300,
+        "normally_opened",
+        "type_intrusion",
+        ["StateArmed"],
+        1,
+        "no_sound"
+    ],
+    [4,
+        "GARAGE",
+        "door",
+        "PULLUP",
+        300,
+        "normally_closed",
+        "type_intrusion",
+        ["StatePartiallyArmed","StateArmed"],
+        40,
+        "play_sound"
+    ],
+    [24,
+        "Smoke",
+        "F",
+        "PULLUP",
+        1000,
+        "normally_closed",
+        "type_fire",
+        ["ANY"],
+        0,
+        "no_sound"
+    ]
+]
+
+# lcd_custom_chars.
+#   index from 1 to 7
+#   set of the values that define the actual character
+#   character name
+#[7,[128,142,144,144,159,155,159,159],"unlock"],
+lcd_custom_chars: [
+    [1,[159,149,159,149,159,159,159,159],"door"],
+    [2,[128,142,145,145,159,155,159,159],"locked"],
+    [3,[159,145,145,147,147,145,145,159],"patio"],
+    [4,[128,142,149,151,145,142,128,128],"clock"],
+    [5,[130,137,133,149,149,133,137,130],"motion"],
+    [6,[140,146,146,140,128,128,128,128],"deg"],
+    [7,[159,142,132,142,142,142,142,142],"camera"]
+]
+
+# output_map.
+# Pin number
+# Output Name
+# normally_closed or normally_opened
+# List of states in which the output is active.
+# List states from which the sensor has to be triggered. Enter ANY to disregard this feature.
+output_map: [
+    [7,
+        "Siren",
+        "normally_low",
+        ["StateAlert","StateFire"],
+        ["StateArmed","StatePartiallyArmed"]
+    ],
+    [8,
+        "ArmedLED",
+        "normally_low",
+        ["StateArmed","StatePartiallyArmed"],
+        ["ANY"]
+    ]
+]
+wunderground location: enter_your_location_code
+wunderground api key: get_your_own_free_wunderground_api_key
+google_username: yourgmail@gmail.com
+google_password: googlepassword
+google_calendar: /calendar/feeds/default/private/full
+smtp_server: smtp.server.com
+smtp_user: username
+smtp_pass: pswd
+addr_list: ["mom@gmail.com","dad@gmail.com"]
+piezo: disable
+speaker: enable
+button_wav: sounds/button.wav
+alarm_wav: sounds/siren.wav
+grace_beeps: sounds/grace_beeps.wav
+grace_beeps3: sounds/grace_beeps3.wav
