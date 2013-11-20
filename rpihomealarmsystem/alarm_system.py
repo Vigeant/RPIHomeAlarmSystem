@@ -643,7 +643,7 @@ class AlarmController():
 
         #create model (MVC pattern)
         self.model = AlarmModel(alarm_config_dictionary)
-
+        self.script_path
         #create sensors
         self.sensor_map = alarm_config_dictionary["sensor_map"]
         GPIO.setmode(
@@ -664,7 +664,7 @@ class AlarmController():
         EmailView(alarm_config_dictionary, self.model)
 
         if alarm_config_dictionary["speaker"] == "enable":
-            SoundPlayerView(alarm_config_dictionary, self.model, script_path)
+            SoundPlayerView(alarm_config_dictionary, self.model, self.script_path)
         if alarm_config_dictionary["piezo"] == "enable":
             PiezoView(alarm_config_dictionary, self.model)
             pass
@@ -690,12 +690,12 @@ class AlarmController():
     
     def get_config(self):
         #read configuration file
-        script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
-        logger.info('script_path ' + script_path)
+        self.script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
+        logger.info('script_path ' + self.script_path)
 
         logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
         try:
-                alarm_config_file = open(script_path + "../../alarm_config.yaml", 'r')
+                alarm_config_file = open(self.script_path + "../../alarm_config.yaml", 'r')
                 alarm_config_dictionary = yaml.load(alarm_config_file)
                 logger.debug("YAML config file loaded succesfully")
                 return alarm_config_dictionary
@@ -704,9 +704,9 @@ class AlarmController():
 
         logger.debug("----- Reverting to JSON config file (alarm_config.json) -----")
         try:
-            alarm_config_file = open(script_path + "../../alarm_config.json", 'r')
+            alarm_config_file = open(self.script_path + "../../alarm_config.json", 'r')
         except:
-            logger.warning("could not open file : " + script_path + "../../alarm_config.json ...")
+            logger.warning("could not open file : " + self.script_path + "../../alarm_config.json ...")
         try:
             alarm_config_dictionary = json.loads(alarm_config_file.read())
             alarm_config_file.close()

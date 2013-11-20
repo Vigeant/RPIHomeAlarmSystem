@@ -45,7 +45,7 @@ starting(){
 		echo "Already running..."
 	else
 		echo "Starting alarmSystem"
-		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
+		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>&1 2>&1 &
 	fi
 }
 
@@ -65,6 +65,7 @@ updating(){
 	#/home/pi/Alarm_system_v1.0/PyDispatcher-2.0.1ts/setup.py install
 
     echo "synching /home/pi/ directory with latest version from dropbox"
+	# TODO corriger mount -a qui ne fait pas la job
 	mount -a
 	rsync -av --delete /mnt/dropbox/Workspace/RPIHomeAlarmSystem /home/pi/
 
