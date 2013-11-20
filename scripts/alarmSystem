@@ -28,12 +28,16 @@ is_running(){
 }
 
 starting(){
-	echo "verifying if user alarm_config.json exists in user home directory"
-	if [ -e /home/pi/alarm_config.json ]; then
-		echo "user alarm_config.json file was found"
+	echo "verifying if user alarm_config is in user home directory"
+	if [ -e /mnt/dropbox/Workspace/alarm_config.yaml ]; then
+		echo "user alarm_config.yaml file was found"
 	else
-		exit 1
-	fi
+        if [ -e /home/pi/alarm_config.json ]; then
+            echo "user alarm_config.json file was found"
+        else
+            exit 1
+        fi
+    fi
 
 	# Check if alarm_system is running
 	if is_running
