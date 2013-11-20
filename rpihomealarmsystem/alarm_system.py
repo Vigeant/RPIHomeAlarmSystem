@@ -37,7 +37,6 @@ Terminate
 import time
 import urllib2
 import json
-import yaml
 import sys
 import string
 import random
@@ -203,7 +202,8 @@ class RemoteService(rpyc.Service):
         logger.info("Received remote create_event(): " + signal_name + ", msg=" + msg)
         event_q.put([dispatcher.send, {"signal": signal, "sender": dispatcher.Any, "msg": msg}])
 
-    def exposed_set_alarm_state(self, state_name):  # this is an exposed method
+    @staticmethod
+    def exposed_set_alarm_state(state_name):  # this is an exposed method
         """ This method allows the alarm_remote to change the state of the AlarmModel. Again, this is rather unsafe;
         it should be modified to restrict what can actually be done.  For example, de-arming the AlarmModel should
         require the PIN.
@@ -215,7 +215,8 @@ class RemoteService(rpyc.Service):
         except:
             logger.warning("State is invalid: " + state_name)
 
-    def exposed_get_model(self): # this is an exposed method
+    @staticmethod
+    def exposed_get_model(): # this is an exposed method
         """ This method simply returns an AlarmModel string containing its current state.
         """
         logger.debug("Received remote get_model().")
@@ -240,10 +241,9 @@ class AlarmController():
         dispatcher.connect(self.handle_update_fault, signal="Fault Update", sender=dispatcher.Any,
                            weak=False)
 
-        alarm_config_dictionary = self.get_config()
-
         #create model (MVC pattern)
-        AlarmModel.getInstance(alarm_config_dictionary)
+        alarm_config_dictionary = AlarmModel.getInstance().alarm_config_dictionary
+
         #create sensors
         self.sensor_map = alarm_config_dictionary["sensor_map"]
         GPIO.setmode(
@@ -288,45 +288,6 @@ class AlarmController():
         terminate = True
         event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
         logger.warning("----- Reboot code entered. -----")
-    
-    def get_config(self):
-        #read configuration file
-        AlarmModel.getInstance().script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
-        logger.info('script_path ' + AlarmModel.getInstance().script_path)
-
-        logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
-        try:
-            alarm_config_file = open(AlarmModel.getInstance().script_path + "../../alarm_config.yaml", 'r')
-            alarm_config_dictionary = yaml.load(alarm_config_file)
-            logger.debug("YAML config file loaded succesfully")
-            return alarm_config_dictionary
-        except:
-            logger.warning("Error while reading YAML config file.", exc_info=True)
-
-        logger.debug("----- Reverting to JSON config file (alarm_config.json) -----")
-
-        try:
-            alarm_config_file = open(AlarmModel.getInstance().script_path + "../../alarm_config.json", 'r')
-            try:
-                alarm_config_dictionary = json.loads(alarm_config_file.read())
-                alarm_config_file.close()
-                return alarm_config_dictionary
-            except ValueError:
-                logger.warning("Error while reading JSON config file. Your alarm_config.json file seems to be corrupted...", exc_info=True)
-        except:
-            logger.warning("could not open file : " + AlarmModel.getInstance().script_path + "../../alarm_config.json ...")
-
-
-
-    #--------------------------------------------------------------------------------
-    def handle_keypad_input(self, msg):
-        if msg == "*" and AlarmModel.getInstance().input_string == self.reboot_string:
-            global terminate
-            terminate = True
-            event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
-            logger.warning("----- Reboot code entered. -----")
-        else:
-            AlarmModel.getInstance().keypad_input(msg)
 
     @staticmethod
     def handle_update_fault(msg):
@@ -1072,6 +1033,7 @@ class LCDView():
 
     #-------------------------------------------------------------------
     def wind_dir_arrow(self, wind_deg):
+        lcd = self.driver.getInstance()
         try:
             if not (self.current_arrow_dir == wind_deg):
                 if wind_deg == "SOUTH_WEST":
@@ -1113,7 +1075,8 @@ class LCDView():
         self.set_backlight(True)
 
 #####################################################################################
-import tty, termios
+import tty
+import termios
 
 
 class StdScanner(Thread):

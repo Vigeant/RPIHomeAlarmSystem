@@ -2,6 +2,8 @@ from pydispatch import dispatcher
 import logging
 from singletonmixin import Singleton
 from event_serializer import event_q
+import os
+import yaml
 
 logger = logging.getLogger('alarm')
 
@@ -14,10 +16,13 @@ class AlarmModel(Singleton):
     alarm_mode = None
 
     #------------------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary):
-        self.arming_grace_time = alarm_config_dictionary[
+    def __init__(self):
+
+        self.alarm_config_dictionary = self.get_config()
+
+        self.arming_grace_time =  self.alarm_config_dictionary[
             "arming grace delay"]  # this is the grace period for the system to arm
-        self.disarming_grace_time = alarm_config_dictionary[
+        self.disarming_grace_time =  self.alarm_config_dictionary[
             "disarming grace delay"]  # this is the grace period for the system to go into alert mode
         self.grace_timer = self.arming_grace_time
 
@@ -32,7 +37,7 @@ class AlarmModel(Singleton):
         self.hours = 0
         self.minutes = 0
         self.seconds = 0
-        self.pin = alarm_config_dictionary["pin"]
+        self.pin =  self.alarm_config_dictionary["pin"]
 
         self.script_path = ""
 
@@ -47,12 +52,27 @@ class AlarmModel(Singleton):
         self.input_activity_setting = 4
 
         self.sensor_list = []
-        self.reboot_string = alarm_config_dictionary["reboot"]
+        self.reboot_string =  self.alarm_config_dictionary["reboot"]
 
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
 
         logger.info("AlarmModel initialized")
+
+    def get_config(self):
+        #read configuration file
+        self.script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
+        logger.info('script_path ' + self.script_path)
+
+        logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
+        try:
+            alarm_config_file = open(self.script_path + "../../alarm_config.yaml", 'r')
+            alarm_config_dictionary = yaml.load(alarm_config_file)
+            logger.debug("YAML config file loaded succesfully")
+            alarm_config_file.close()
+            return alarm_config_dictionary
+        except:
+            logger.warning("Error while reading YAML config file.", exc_info=True)
 
     def __str__(self):
         model_string = "AlarmModel:\n"
