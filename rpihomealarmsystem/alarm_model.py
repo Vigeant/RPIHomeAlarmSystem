@@ -5,7 +5,7 @@ from event_serializer import event_q
 import os
 import yaml
 
-logger = logging.getLogger('alarm')
+__logger = logging.getLogger('alarm')
 
 
 class AlarmModel(Singleton):
@@ -57,22 +57,22 @@ class AlarmModel(Singleton):
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
 
-        logger.info("AlarmModel initialized")
+        __logger.info("AlarmModel initialized")
 
     def get_config(self):
         #read configuration file
         self.script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
-        logger.info('script_path ' + self.script_path)
+        __logger.info('script_path ' + self.script_path)
 
-        logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
+        __logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
         try:
             alarm_config_file = open(self.script_path + "../../alarm_config.yaml", 'r')
             alarm_config_dictionary = yaml.load(alarm_config_file)
-            logger.debug("YAML config file loaded succesfully")
+            __logger.debug("YAML config file loaded succesfully")
             alarm_config_file.close()
             return alarm_config_dictionary
         except:
-            logger.warning("Error while reading YAML config file.", exc_info=True)
+            __logger.warning("Error while reading YAML config file.", exc_info=True)
 
     def __str__(self):
         model_string = "AlarmModel:\n"
@@ -110,7 +110,7 @@ class AlarmModel(Singleton):
             global terminate
             terminate = True
             event_q.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
-            logger.warning("----- Reboot code entered. -----")
+            __logger.warning("----- Reboot code entered. -----")
         elif key == "*":
             self.input_string = ""
             self.display_string = ""
@@ -127,14 +127,14 @@ class AlarmModel(Singleton):
                 self.display_string += "*"
             self.input_string += key
 
-        logger.debug("Input string: " + self.input_string)
+        __logger.debug("Input string: " + self.input_string)
 
         event_q.put([dispatcher.send,
                     {"signal": "Input String Update Model", "sender": dispatcher.Any,
                      "msg": self.display_string}])
 
         if self.input_string == self.pin:
-            level = logger.info("PIN entered.")
+            level = __logger.info("PIN entered.")
             self.broadcast_message("PIN entered.")
             self.input_string = ""
             self.display_string = ""
@@ -183,7 +183,7 @@ class AlarmModel(Singleton):
                                       "msg": [self.temp_c, self.wind_dir, self.wind_kph]}])
 
     def update_fault(self, msg):
-        logger.warning("Alarm Fault. msg=" + msg)
+        __logger.warning("Alarm Fault. msg=" + msg)
         if msg == "onbattery":
             self.fault_power = True
             fault_type = "power"
@@ -253,7 +253,6 @@ class AlarmModel(Singleton):
         event_q.put(
             [dispatcher.send, {"signal": "Alarm Message", "sender": dispatcher.Any, "msg": msg}])
 
-
 class AbstractState():
     """ This class is the default behaviour of a state.  As per the name, it is meant to be abstract and
     specialized.  Every state can transition to StateFire.  This behaviour is implemented by the AbstractState.
@@ -281,7 +280,7 @@ class AbstractState():
         """ This method changes the alarm_mode of the AlarmModel.  It ensures the proper "Alarm Mode Update Model"
         event is generated.
         """
-        logger.info("------- Entering state " + str(state) + " -------")
+        __logger.info("------- Entering state " + str(state) + " -------")
         self.model.last_alarm_mode = self.model.alarm_mode
         self.model.alarm_mode = state
         event_q.put(
@@ -305,7 +304,7 @@ class StateIdle(AbstractState):
                 self.set_state(StatePartiallyArmed())
             else:
                 self.model.broadcast_message("Not locked!")
-                logger.info("Sensor not locked when attempting to enter StatePartiallyArmed")
+                __logger.info("Sensor not locked when attempting to enter StatePartiallyArmed")
 
 
 class StatePartiallyArmed(AbstractState):

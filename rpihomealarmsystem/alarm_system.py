@@ -351,7 +351,7 @@ class Sensor(Thread):
         self.sensor_mutex = RLock()
 
         self.controller = controller
-        [self.pin, self.name, self.icon, self.pin_mode, period, self.normally_closed, self.sensor_type, armed_states,
+        [self.pin, self.name, self.icon, self.pin_mode, period, self.normally_closed, self.sensor_type, self.armed_states,
          disarming_setting, self.play_sound] = config
 
         self.polling_period = period / 1000.0    #convert to seconds.
@@ -364,11 +364,8 @@ class Sensor(Thread):
         #Create a list of actual State classes
         self.armed_states = []
         self.armed_states_all = False
-        for state_name in armed_states:
-            if state_name == "ANY":
-                self.armed_states_all = True
-            else:
-                self.armed_states.append(getattr(sys.modules[__name__], state_name))
+        if self.armed_states == ["ANY"]:
+            self.armed_states_all = True
 
         #These variable just need to be initialized...
         self._current_reading = 0            #current valid sensor reading
@@ -391,7 +388,7 @@ class Sensor(Thread):
             if self.pin_mode == "PULLUP":
                 temp_mode = GPIO.PUD_UP
             elif self.pin_mode == "FLOATING":
-                temp_mode = GPIO.PUD_UP
+                temp_mode = GPIO.PUD_OFF
             elif self.pin_mode == "PULLDOWN":
                 temp_mode = GPIO.PUD_DOWN
             GPIO.setup(int(self.pin), GPIO.IN, pull_up_down=temp_mode)
@@ -460,14 +457,14 @@ class Sensor(Thread):
     def is_armed(self, state=None):
         # state: by default, it looks at the current state of the model.
         if state is None:
-            state = AlarmModel.getInstance().alarm_mode
+            state = str(AlarmModel.getInstance().alarm_mode)
 
         # if this sensor is always armed (eg. Smoke Detector)
         if self.armed_states_all:
             return True
 
         for astate in self.armed_states:
-            if isinstance(state, astate):
+            if state == astate:
                 return True
         return False
 
@@ -555,15 +552,15 @@ class SoundPlayerView():
     def play_alarm_mode(self):
         alarm_mode = AlarmModel.getInstance().alarm_mode
         logger.debug("play_alarm_mode")
-        if alarm_mode.str() == "StateIdle":
+        if str(alarm_mode) == "StateIdle":
             try:
                 with self.lock:
-                    if AlarmModel.getInstance().last_alarm_mode.str() == "StateAlert":
+                    if str(AlarmModel.getInstance().last_alarm_mode) == "StateAlert":
                         subprocess.call("ps x | grep '[a]play_notes' | awk '{ print $1 }' | xargs kill", shell=True)
                     self.play_notes("grace_beeps3")
             except:
                 logger.warning("Error when trying to kill aplay process", exc_info=True)
-        elif alarm_mode.str() == "StateAlert":
+        elif str(alarm_mode) == "StateAlert":
             self.play_notes("alarm_wav")
 
     def play_pin(self, msg):
@@ -612,7 +609,7 @@ class PiezoView():
                            [880, 0, 0]]}])
 
     def grace_timer(self, msg):
-        if AlarmModel.getInstance().alarm_mode.str() == "StateArming":
+        if str(AlarmModel.getInstance().alarm_mode) == "StateArming":
             if msg > 10:
                 self.player.next([self.player.play_notes, {"string": [[200, 50, 0.1], [200, 0, 0]]}])
             else:
@@ -627,16 +624,16 @@ class PiezoView():
 
         self.player.next([self.player.stop, {}])
 
-        if alarm_mode.str() == "StateAlert":
+        if str(alarm_mode) == "StateAlert":
             self.player.next([self.player.play_siren, {}])
-        elif alarm_mode.str() == "StateArming":
+        elif str(alarm_mode) == "StateArming":
             self.player.next([self.player.play_continuously, {"string": [[200, 50, 0.1], [200, 0, 0.9]]}])
-        elif alarm_mode.str() == "StateDisarming":
+        elif str(alarm_mode) == "StateDisarming":
             self.player.next([self.player.play_continuously, {"string": [[2200, 50, 0.4], [2200, 0, 0.1]]}])
-        elif alarm_mode.str() == "StateIdle":
+        elif str(alarm_mode) == "StateIdle":
             self.player.next(
                 [self.player.play_notes, {"string": [[440, 50, 0.1], [440, 0, 0.05], [440, 50, 0.1], [440, 0, 0]]}])
-        elif alarm_mode.str() == "StatePartiallyArmed":
+        elif str(alarm_mode) == "StatePartiallyArmed":
             self.player.next([self.player.play_notes, {
                 "string": [[440, 50, 0.1], [440, 0, 0.05], [503, 50, 0.1], [503, 0, 0.05], [566, 50, 0.1],
                            [566, 0, 0]]}])
@@ -1006,27 +1003,30 @@ class LCDView():
     #-------------------------------------------------------------------
     def update_alarm_mode(self):
         alarm_mode = AlarmModel.getInstance().alarm_mode
-        if alarm_mode.str() == "StateArmed":
+        if str(alarm_mode) == "StateArmed":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  AWAY'
-        if alarm_mode.str() == "StatePartiallyArmed":
+        if str(alarm_mode) == "StatePartiallyArmed":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  STAY'
-        elif alarm_mode.str() == "StateDisarming":
+        elif str(alarm_mode) == "StateDisarming":
             self.backlight_timer_active(timer_active=False)
             status_str = 'DISARM'
-        elif alarm_mode.str() == "StateArming":
+        elif str(alarm_mode) == "StateArming":
             self.backlight_timer_active(timer_active=False)
             status_str = 'ARMING'
-        elif alarm_mode.str() == "StateIdle":
+        elif str(alarm_mode) == "StateIdle":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
             status_str = '  IDLE'
-        elif alarm_mode.str() == "StateAlert":
+        elif str(alarm_mode) == "StateAlert":
             self.backlight_timer_active(timer_active=False)
             status_str = ' ALERT'
-        elif alarm_mode.str() == "StateFire":
+        elif str(alarm_mode) == "StateFire":
             self.backlight_timer_active(timer_active=False)
             status_str = '  FIRE'
+        else:
+            status_str = ' ERROR'
+
         logger.debug("LCDView changing state to: " + status_str)
         self.send_to_lcd(self.alarm_mode_cursor_start, status_str)
         self.update_PIN(AlarmModel.getInstance().input_string)
@@ -1271,17 +1271,17 @@ class SMSView():
 
     def update_alarm_mode(self):
         #Update the end time of an existing event.
-        if (not self.last_alarm_mode_event is None) and isinstance(AlarmModel.getInstance().alarm_mode, StateIdle):
+        if (not self.last_alarm_mode_event is None) and str(AlarmModel.getInstance().alarm_mode) == "StateIdle":
             self.update_event_end_time(self.last_alarm_mode_event)
             self.last_alarm_mode_event = None
 
-        if isinstance(AlarmModel.getInstance().alarm_mode, StateAlert):
+        if str(AlarmModel.getInstance().alarm_mode) =="StateAlert":
             self.last_alarm_mode_event = self.insert_event("RPI Intrusion",
                                                            "System in Alert state\nSensor triggered: " +
                                                            AlarmModel.getInstance().last_trig_sensor.name +
                                                            " while in state " +
                                                            str(AlarmModel.getInstance().last_trig_state))  # sends sms
-        elif isinstance(AlarmModel.getInstance().alarm_mode, StateFire):
+        elif str(AlarmModel.getInstance().alarm_mode) == "StateFire":
             self.last_alarm_mode_event = self.insert_event("RPI Fire",
                                                            "System in Fire state\n"
                                                            "Fire detector triggered while in state " +
@@ -1484,19 +1484,19 @@ class EmailView():
             logger.warning("EmailView not created properly.")
 
     def update_alarm_mode(self):
-        if isinstance(AlarmModel.getInstance().alarm_mode, StateAlert):
+        if str(AlarmModel.getInstance().alarm_mode) == "StateAlert":
             self.create_email("RPI_Intrusion",
                               "Sensor triggered: " + AlarmModel.getInstance().last_trig_sensor.name + " while in state " + str(
                                   AlarmModel.getInstance().last_trig_state)) #sends sms
-        elif isinstance(AlarmModel.getInstance().alarm_mode, StateFire):
+        elif str(AlarmModel.getInstance().alarm_mode) == "StateFire":
             self.create_email("RPI_Fire",
                               "Fire detector triggered while in state " + str(AlarmModel.getInstance().last_trig_state)) #sends sms
-        elif isinstance(AlarmModel.getInstance().alarm_mode, StateIdle):
-            if isinstance(AlarmModel.getInstance().last_alarm_mode, StateFire):
+        elif str(AlarmModel.getInstance().alarm_mode) == "StateIdle":
+            if str(AlarmModel.getInstance().last_alarm_mode) =="StateFire":
                 self.create_email("RPI_Fire", "Fire alarm off.") #sends sms
 
     def update_fault(self, msg):
-        if (msg == "power"):
+        if msg == "power":
             if AlarmModel.getInstance().fault_power:
                 self.create_email("RPI_Power_Fault", "APCUPS on battery.") #sends sms
             else:
@@ -1558,22 +1558,15 @@ class GPIOView():
     #-------------------------------------------------------------------
     def __init__(self, output_config):
 
-        [self.pin, self.name, normal_pin_value, states_on, states_from] = output_config
+        [self.pin, self.name, normal_pin_value, self.states_on, self.states_from] = output_config
 
         self.states_on = []
-        for astate in states_on:
-            self.states_on.append(getattr(sys.modules[__name__], astate))
-            logger.debug("State ON: " + astate + " added to GPIOView: " + self.name)
 
         self.states_from = []
         self.states_from_any = False
         self.active = False
-        for astate in states_from:
-            if astate == "ANY":
-                self.states_from_any = True
-            else:
-                self.states_from.append(getattr(sys.modules[__name__], astate))
-                logger.debug("State from: " + astate + " added to GPIOView: " + self.name)
+        if self.states_from == ["ANY"]:
+            self.states_from_any = True
 
         if normal_pin_value == "normally_low":
             self.normal_pin_value = False
@@ -1589,8 +1582,8 @@ class GPIOView():
         logger.info("GPIOView (" + self.name + ") created")
 
     def update_alarm_mode(self):
-        if (AlarmModel.getInstance().alarm_mode.__class__ in self.states_on) and self.is_active_from_state(
-                AlarmModel.getInstance().last_trig_state.__class__):
+        if (str(AlarmModel.getInstance().alarm_mode) in self.states_on) and self.is_active_from_state(
+                str(AlarmModel.getInstance().last_trig_state)):
             if GPIO.input(self.pin) == self.normal_pin_value:
                 logger.info("Output turned on: " + self.name)
                 self.active = True
