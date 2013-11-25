@@ -50,7 +50,7 @@ class AlarmModel(Singleton):
         self.input_activity_setting = 4
 
         self.sensor_list = []
-        self.reboot_string =  self.alarm_config_dictionary["reboot"]
+        self.reboot_string = str(self.alarm_config_dictionary["reboot"])
 
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
