@@ -185,8 +185,8 @@ class AlarmRemote(Thread):
     def __init__(self, model):
         Thread.__init__(self)
         self.daemon = True
-        self.start()
         RemoteService.model = model
+        self.start()
 
     def run(self):
         logger.info("AlarmRemote started")
@@ -370,16 +370,17 @@ class KeypadScanner(Thread):
         """ Run the keypad scanner """
         logger.info("KeypadScanner started")
         global lcd_init_required
-        while (True):
+        while True:
             try:
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
                     self.model.keypad_input(key)
                 time.sleep(0.1)
 
-            except:
-                #logger.warning("Exception in KeypadScanner", exc_info=True)
-                logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
+            except Exception, err:
+                #print sys.exc_info()[0]
+                logger.warning("Exception in KeypadScanner", exc_info=True)
+                #logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
                 time.sleep(10)
 
 
@@ -914,7 +915,7 @@ class LCDView():
             self.update_weather("")
             self.update_time()
             self.update_alarm_mode()
-            self.update_msg(self.model.last_message)
+            self.update_msg(AlarmModel.getInstance().last_message)
             logger.debug("LCD updating current display completed.")
 
             logger.info("LCD initialized")
@@ -1714,11 +1715,12 @@ if __name__ == "__main__":
         "------------------------------------------- Logger Started -------------------------------------------")
 
     logger.debug("Starting Event Serializer")
-    #EventSerializer.getInstance()
+    EventSerializer.getInstance()
     logger.debug("Starting AlarmController")
-    #AlarmController()
+    AlarmController()
     logger.info("----- Initialization complete -----")
     print "entering loop"
+
     while threading.active_count() > 0 and not terminate:
         time.sleep(0.1)
 

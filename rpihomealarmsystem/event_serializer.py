@@ -4,8 +4,6 @@ from singletonmixin import Singleton
 import logging
 #from pydispatch import dispatcher
 
-logger = logging.getLogger('alarm')
-
 event_q = Queue()
 
 signal_log_level_dict = {"Time Update Model": logging.NOTSET,
@@ -24,6 +22,8 @@ class EventSerializer(Thread, Singleton):
     #------------------------------------------------------------------------------
     def __init__(self):
         """ Init the event serializer """
+        global logger
+        logger = logging.getLogger('serializer')
         Thread.__init__(self)
         self.daemon = True
         self.start()

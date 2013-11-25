@@ -173,7 +173,7 @@ class I2CLCD(Singleton):
 
     def get_key(self):
         try:
-            self.raw_keypad = self.get_keypad_buttons()
+            raw_keypad = self.get_keypad_buttons()
         #print "raw key fetched"
         except:
             pass
@@ -184,12 +184,12 @@ class I2CLCD(Singleton):
             for key, state in self.key_state.iteritems():
                 if state == self.BUTTON_RELEASED:
 
-                    if key in self.raw_keypad:                  #and is read as pressed
+                    if key in raw_keypad:                  #and is read as pressed
                         #print key
                         self.key_state[key] = self.BUTTON_PRESSED
                         return key
                 else:
-                    if not (key in self.raw_keypad):
+                    if not (key in raw_keypad):
                         self.key_state[key] = self.BUTTON_RELEASED
 
         return ''
