@@ -4,6 +4,10 @@ from singletonmixin import Singleton
 from event_serializer import event_q
 import os
 import yaml
+import time
+from threading import RLock
+from threading import Thread
+import RPi.GPIO as GPIO
 
 class AlarmModel(Singleton):
     """ This class is the Model in the MVC pattern and contains all the info for
@@ -12,7 +16,6 @@ class AlarmModel(Singleton):
     """
     alarm_mode = None
 
-    #------------------------------------------------------------------------------
     def __init__(self):
         global logger
         logger = logging.getLogger('model')
@@ -138,17 +141,9 @@ class AlarmModel(Singleton):
             self.display_string = ""
             self.alarm_state_machine("PIN")
 
-    #-------------------------------------------------------------------
     def alarm_state_machine(self, event_type, sensor=None):
         self.alarm_mode.handle_event(event_type, sensor)
 
-    ##-------------------------------------------------------------------
-    #def arm_signal_handler(self, signal_number, frame):
-    #    logger.info("Received arming signal. Arming...")
-    #    self.alarm_mode.set_state(StateArmed)
-    #    signal.pause()
-
-    #-------------------------------------------------------------------
     def set_grace_timer(self, t):
         self.grace_timer = t
         event_q.put(
@@ -316,7 +311,9 @@ class StatePartiallyArmed(AbstractState):
         if event_type == "PIN":
             self.set_state(StateIdle())
         elif event_type == "sensor":
+            logging.getLogger("StatePARMED").debug("A sensor event was received")
             if sensor.is_armed() and not sensor.is_locked():
+                logging.getLogger("StatePARMED").debug("An armed sensor event was received")
                 self.model.last_trig_sensor = sensor
                 self.model.last_trig_state = self
                 if sensor.get_disarming_grace() == 0:
@@ -416,3 +413,141 @@ class StateFire(AbstractState):
         elif event_type == "fire":    # leaving StateFire if there is no longer an unlocked fire detector
             if self.model.check_sensors_locked(sensor_type="fire"):
                 self.set_state(StateIdle())
+
+
+class Sensor(Thread):
+    """ This class represents a sensor.
+    """
+
+    def __init__(self, controller, config, dedicated_thread=False):
+        Thread.__init__(self)
+        self.daemon = True
+        self.sensor_mutex = RLock()
+
+        self.controller = controller
+        self.model = AlarmModel.getInstance()
+        [self.pin, self.name, self.icon, self.pin_mode, period, self.normally_closed, self.sensor_type, self.armed_states,
+         disarming_setting, self.play_sound] = config
+
+        self.polling_period = period / 1000.0    #convert to seconds.
+
+        if disarming_setting == 1:    #default value ("disarming grace delay")
+            self._disarming_grace = self.model.disarming_grace_time
+        else:
+            self._disarming_grace = disarming_setting
+
+        #Create a list of actual State classes
+        #self.armed_states = []
+        self.armed_states_all = False
+        for statename in self.armed_states:
+            if statename == "ANY":
+                self.armed_states_all = True
+
+        #These variable just need to be initialized...
+        self._current_reading = 0            #current valid sensor reading
+        self._last_reading = 0            #previous valid sensor reading
+        self._previous_raw_reading = 0    #previous raw reading used for de-bouncing purposes and determine validity
+
+        self.setup()
+
+        if dedicated_thread:
+            self.start()    # start the thread
+
+    def __str__(self):
+        return "Sensor(" + self.name + ", polling_period: " + str(self.polling_period) + ", normally closed: " + str(
+            self.is_normally_closed()) + ", reading: " + str(self.get_reading()) + ", locked: " + str(
+            self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace) + ")"
+
+    def setup(self):
+        try:
+            temp_mode = GPIO.PUD_UP
+            if self.pin_mode == "PULLUP":
+                temp_mode = GPIO.PUD_UP
+            elif self.pin_mode == "FLOATING":
+                temp_mode = GPIO.PUD_UP
+            elif self.pin_mode == "PULLDOWN":
+                temp_mode = GPIO.PUD_DOWN
+            GPIO.setup(int(self.pin), GPIO.IN, pull_up_down=temp_mode)
+        except:
+            logger.warning("Exception while setting a Sensor.", exc_info=True)
+
+        #GPIO.add_event_detect(int(self.pin), GPIO.BOTH,callback=self.handle_event, bouncetime=1000)	#events will be generated for both raising and falling edges
+        self._read_input() #initialize the value to the current reading
+
+    def run(self):
+        logger.info("Started: " + str(self))
+        while (True):
+            self._read_input()
+            if self.has_changed():
+                if not self.is_locked():
+                    if self.is_armed():
+                        logger.warning("Unlocked: " + str(self))
+                self.controller.handle_sensor_handler(self)
+            time.sleep(self.polling_period)
+
+    def get_disarming_grace(self):
+        return self._disarming_grace
+
+    def get_reading(self):
+        with self.sensor_mutex:
+            return self._current_reading
+
+    def has_changed(self):
+        return not (self._current_reading == self._last_reading)
+
+    #return (last_reading==self.get_reading())
+
+    def _read_input(self):
+        with self.sensor_mutex:
+            try:
+                raw_reading = GPIO.input(int(self.pin))
+
+                if raw_reading == self._previous_raw_reading:
+                    self._last_reading = self._current_reading
+                    self._current_reading = self.convert_raw(raw_reading)
+
+                self._previous_raw_reading = raw_reading
+
+                """
+                self._current_reading=GPIO.input(int(self.pin))
+                """
+            except:
+                logger.warning("Exception while reading a Sensor.", exc_info=True)
+
+            return self._current_reading
+
+    def convert_raw(self, reading):
+        if self.pin_mode == "FLOATING":
+            return 1 - reading
+        elif self.pin_mode == "PULLDOWN":
+            return 1 - reading
+        return reading #assuming "PULLUP"
+
+    def is_locked(self):
+        if self.is_normally_closed():
+            return 1 - self.get_reading()
+        else:    #normally_opened
+            return self.get_reading()
+
+    def is_armed(self, state=None):
+        # state: by default, it looks at the current state of the model.
+        if state is None:
+            state = self.model.alarm_mode
+
+        # if this sensor is always armed (eg. Smoke Detector)
+        if self.armed_states_all:
+            return True
+
+        for astate in self.armed_states:
+            if astate == str(state):
+                return True
+        return False
+
+    def is_normally_closed(self):
+        return self.normally_closed == "normally_closed"
+
+    def is_fire_type(self):
+        return self.sensor_type == "type_fire"
+
+    def play_sound(self):
+        return self.play_sound == "play_sound"

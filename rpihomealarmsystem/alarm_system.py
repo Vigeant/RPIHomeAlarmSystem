@@ -52,7 +52,6 @@ from email.mime.text import MIMEText        # Import the email modules
 from Queue import Queue
 import threading
 from threading import Thread
-from threading import RLock
 from i2clcd import I2CLCD
 from I2CBV4618 import I2CBV4618
 import RPi.GPIO as GPIO
@@ -61,11 +60,10 @@ import gdata.calendar
 import gdata.calendar.service
 from pydispatch import dispatcher
 import rpyc
-#from rpihomealarmsystem.alarm_system import AbstractState
 from alarm_model import AlarmModel
+from alarm_model import Sensor
 from event_serializer import EventSerializer
 
-#eventQ = Queue()
 network_is_alive = True
 lcd_init_required = False
 
@@ -382,144 +380,6 @@ class KeypadScanner(Thread):
                 logger.warning("Exception in KeypadScanner", exc_info=True)
                 #logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
                 time.sleep(10)
-
-
-class Sensor(Thread):
-    """ This class represents a sensor.
-    """
-
-    def __init__(self, controller, config, dedicated_thread=False):
-        Thread.__init__(self)
-        self.daemon = True
-        self.sensor_mutex = RLock()
-
-        self.controller = controller
-        self.model = AlarmModel.getInstance()
-        [self.pin, self.name, self.icon, self.pin_mode, period, self.normally_closed, self.sensor_type, self.armed_states,
-         disarming_setting, self.play_sound] = config
-
-        self.polling_period = period / 1000.0    #convert to seconds.
-
-        if disarming_setting == 1:    #default value ("disarming grace delay")
-            self._disarming_grace = self.model.disarming_grace_time
-        else:
-            self._disarming_grace = disarming_setting
-
-        #Create a list of actual State classes
-        #self.armed_states = []
-        self.armed_states_all = False
-        for statename in self.armed_states:
-            if statename == "ANY":
-                self.armed_states_all = True
-
-        #These variable just need to be initialized...
-        self._current_reading = 0            #current valid sensor reading
-        self._last_reading = 0            #previous valid sensor reading
-        self._previous_raw_reading = 0    #previous raw reading used for de-bouncing purposes and determine validity
-
-        self.setup()
-
-        if dedicated_thread:
-            self.start()    # start the thread
-
-    def __str__(self):
-        return "Sensor(" + self.name + ", polling_period: " + str(self.polling_period) + ", normally closed: " + str(
-            self.is_normally_closed()) + ", reading: " + str(self.get_reading()) + ", locked: " + str(
-            self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace) + ")"
-
-    def setup(self):
-        try:
-            temp_mode = GPIO.PUD_UP
-            if self.pin_mode == "PULLUP":
-                temp_mode = GPIO.PUD_UP
-            elif self.pin_mode == "FLOATING":
-                temp_mode = GPIO.PUD_UP
-            elif self.pin_mode == "PULLDOWN":
-                temp_mode = GPIO.PUD_DOWN
-            GPIO.setup(int(self.pin), GPIO.IN, pull_up_down=temp_mode)
-        except:
-            logger.warning("Exception while setting a Sensor.", exc_info=True)
-
-        #GPIO.add_event_detect(int(self.pin), GPIO.BOTH,callback=self.handle_event, bouncetime=1000)	#events will be generated for both raising and falling edges
-        self._read_input() #initialize the value to the current reading
-
-    def run(self):
-        logger.info("Started: " + str(self))
-        while (True):
-            self._read_input()
-            if self.has_changed():
-                if not self.is_locked():
-                    if self.is_armed():
-                        logger.warning("Unlocked: " + str(self))
-                self.controller.handle_sensor_handler(self)
-            time.sleep(self.polling_period)
-
-    def get_disarming_grace(self):
-        return self._disarming_grace
-
-    def get_reading(self):
-        with self.sensor_mutex:
-            return self._current_reading
-
-    def has_changed(self):
-        return not (self._current_reading == self._last_reading)
-
-    #return (last_reading==self.get_reading())
-
-    def _read_input(self):
-        with self.sensor_mutex:
-            try:
-                raw_reading = GPIO.input(int(self.pin))
-
-                if raw_reading == self._previous_raw_reading:
-                    self._last_reading = self._current_reading
-                    self._current_reading = self.convert_raw(raw_reading)
-
-                self._previous_raw_reading = raw_reading
-
-                """
-                self._current_reading=GPIO.input(int(self.pin))
-                """
-            except:
-                logger.warning("Exception while reading a Sensor.", exc_info=True)
-
-            return self._current_reading
-
-    def convert_raw(self, reading):
-        if self.pin_mode == "FLOATING":
-            return 1 - reading
-        elif self.pin_mode == "PULLDOWN":
-            return 1 - reading
-        return reading #assuming "PULLUP"
-
-    def is_locked(self):
-        if self.is_normally_closed():
-            return 1 - self.get_reading()
-        else:    #normally_opened
-            return self.get_reading()
-
-    def is_armed(self, state=None):
-        # state: by default, it looks at the current state of the model.
-        if state == None:
-            state = self.model.alarm_mode
-
-        # if this sensor is always armed (eg. Smoke Detector)
-        if self.armed_states_all:
-            return True
-
-        for astate in self.armed_states:
-            if str(state) == "astate":
-                return True
-        return False
-
-    def is_normally_closed(self):
-        return (self.normally_closed == "normally_closed")
-
-    def is_fire_type(self):
-        return self.sensor_type == "type_fire"
-
-    def play_sound(self):
-        return self.play_sound == "play_sound"
 
 
 class SensorScanner(Thread):
@@ -1403,7 +1263,7 @@ class SMSView():
         event.content = atom.Content(text=message)
         event.where.append(gdata.calendar.Where(value_string="Home"))
         #start_time = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 2 * 60))
-        start_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()))
+        start_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()+60))
 
         when = gdata.calendar.When(start_time=start_time, end_time=start_time)
         reminder = gdata.calendar.Reminder(minutes=1, extension_attributes={"method": "sms"})
