@@ -655,7 +655,7 @@ class AlarmController():
         self.sensor_map = alarm_config_dictionary["sensor_map"]
         #for type in [IntrusionSensor,MotionCamera,FireSensor]: # This is the target code after changes to the
                                                                 # Sensors classes are made
-        for sensor_type in [Sensor, MotionCamera]:
+        for sensor_type in [Sensor, FireSensor, MotionCamera]:
             for sensor_config in self.sensor_map[sensor_type.__name__]:
                 logger.debug("Raw sensor config: " + str(sensor_config))
                 new_sensor = sensor_type(self, sensor_config)
@@ -797,6 +797,9 @@ class AbstractSensor(Thread):
         self.name = config["name"]
         self.icon = config["icon"]
         self.polling_period = config["polling_period"] / 1000.0    #convert to seconds.
+        armed_states = config["armed_states"]
+        disarming_setting = config["disarming_setting"]
+        self.play_sound = config["play_sound"]
 
         #Create a list of actual State classes
         self.armed_states = []
@@ -807,12 +810,17 @@ class AbstractSensor(Thread):
             else:
                 self.armed_states.append(getattr(sys.modules[__name__], state_name))
 
+        if disarming_setting == 1:    #default value ("disarming grace delay")
+            self._disarming_grace = self.controller.model.disarming_grace_time
+        else:
+            self._disarming_grace = disarming_setting
+
         #These variable just need to be initialized...
         self._current_reading = 1       #current valid sensor reading
         self._last_reading = 1          #previous valid sensor reading
 
     def __str__(self):
-        return "Sensor(" + self.name + ", polling_period: " + str(self.polling_period) + ", locked: " + \
+        return self.__class__.__name__ + "(" + self.name + ", polling_period: " + str(self.polling_period) + ", locked: " + \
                str(self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace)
 
     def run(self):
@@ -865,27 +873,18 @@ class Sensor(AbstractSensor):
     """ This class represents a sensor.
     """
     def __init__(self, controller, config):
-        AbstractSensor.__init__(controller, config)
+        AbstractSensor.__init__(self, controller, config)
 
         self.pin = config["pin"]
         self.pin_mode = config["pin_mode"]
         self.normally_closed = config["normally_closed"]
-        armed_states = config["armed_states"]
-        disarming_setting = config["disarming_setting"]
-        self.play_sound = config["play_sound"]
-
-        if disarming_setting == 1:    #default value ("disarming grace delay")
-            self._disarming_grace = self.controller.model.disarming_grace_time
-        else:
-            self._disarming_grace = disarming_setting
 
         self._previous_raw_reading = 0  #previous raw reading used for de-bouncing purposes and determine validity
         self.setup()
 
     def __str__(self):
         return AbstractSensor.__str__(self) + ", pin (mode): " + str(self.pin) + "(" + str(self.pin_mode) + \
-               ") , normally closed: " + str(self._is_normally_closed()) + ", raw reading: " + \
-               str(self.get_reading()) + ")"
+               ") , normally closed: " + str(self._is_normally_closed()) + ")"
 
     def setup(self):
         try:
@@ -938,8 +937,9 @@ class Sensor(AbstractSensor):
 
 class FireSensor(Sensor):
     def __init__(self, controller, config):
-        config["armed_states"] = "ANY"
-        Sensor.__init__(controller, config)
+        config["armed_states"] = ["ANY"]
+        config["disarming_setting"] = 0
+        Sensor.__init__(self, controller, config)
 
 class MotionCamera(AbstractSensor):
     """ This class represents a Motion Camera (eg. webcam).
@@ -951,6 +951,10 @@ class MotionCamera(AbstractSensor):
                            weak=False)
         self.motion_activity_timer = 0
         self.MOTION_ACTIVITY_TIMER_SETTING = 4
+
+    def __str__(self):
+        return AbstractSensor.__str__(self) + "MOTION_ACTIVITY_TIMER_SETTING=" + \
+               str(self.MOTION_ACTIVITY_TIMER_SETTING) + ")"
 
     # possible event: event_start | event_end | motion_detected
     def handle_event(self, msg):

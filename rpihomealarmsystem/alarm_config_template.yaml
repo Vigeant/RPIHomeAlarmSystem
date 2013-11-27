@@ -89,7 +89,6 @@ sensor_map:
         name: "Camera 1"
         icon: "camera"
         polling_period: 500
-        normally_closed: 1
         armed_states: ["StateArmed"]
         disarming_setting: 0
         play_sound: 0

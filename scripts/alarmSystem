@@ -45,7 +45,7 @@ starting(){
 		echo "Already running..."
 	else
 		echo "Starting alarmSystem"
-		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>/dev/null 2>&1 &
+		cd /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/ && exec python -u /home/pi/RPIHomeAlarmSystem/rpihomealarmsystem/alarm_system.py 1>&1 2>&1 &
 	fi
 }
 
@@ -81,14 +81,10 @@ case "$1" in
 	starting
     ;;
   update)
-    if is_running
-	then
-	    stopping
-	    updating
-	    starting
-	else
-	    updating
-	fi
+    stopping
+    updating
+    starting
+
 
     ;;
   stop)
