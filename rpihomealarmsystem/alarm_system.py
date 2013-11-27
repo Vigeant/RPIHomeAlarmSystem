@@ -835,8 +835,13 @@ class AbstractSensor(Thread):
             time.sleep(self.polling_period)
 
     def _set_reading(self, reading):
-        self._last_reading = self._current_reading
-        self._current_reading = reading
+        with self.sensor_mutex:
+            self._last_reading = self._current_reading
+            self._current_reading = reading
+
+    def get_reading(self):
+        with self.sensor_mutex:
+            return self._current_reading
 
     def has_changed(self):
         return not (self._current_reading == self._last_reading)
@@ -883,7 +888,7 @@ class Sensor(AbstractSensor):
         self.setup()
 
     def __str__(self):
-        return AbstractSensor.__str__(self) + ", pin (mode): " + str(self.pin) + "(" + str(self.pin_mode) + \
+        return AbstractSensor.__str__(self) + ", pin(mode): " + str(self.pin) + "(" + str(self.pin_mode) + \
                ") , normally closed: " + str(self._is_normally_closed()) + ")"
 
     def setup(self):
@@ -908,12 +913,12 @@ class Sensor(AbstractSensor):
 
                 if raw_reading == self._previous_raw_reading:
                     self._set_reading(self.convert_raw(raw_reading))
-
+                else:
+                    self._set_reading(self.get_reading())   # The reading stays the same.  We have to call _set_reading
+                                                            # in order to ensure has_changed() is functioning properly.
                 self._previous_raw_reading = raw_reading
             except:
                 logger.warning("Exception while reading a Sensor.", exc_info=True)
-
-            return self._current_reading
 
     def convert_raw(self, reading):
         # Convert for pin mode
@@ -953,7 +958,7 @@ class MotionCamera(AbstractSensor):
         self.MOTION_ACTIVITY_TIMER_SETTING = 4
 
     def __str__(self):
-        return AbstractSensor.__str__(self) + "MOTION_ACTIVITY_TIMER_SETTING=" + \
+        return AbstractSensor.__str__(self) + ", MOTION_ACTIVITY_TIMER_SETTING=" + \
                str(self.MOTION_ACTIVITY_TIMER_SETTING) + ")"
 
     # possible event: event_start | event_end | motion_detected
@@ -961,15 +966,19 @@ class MotionCamera(AbstractSensor):
         logger.debug(self.name + " receiving event " + msg)
         if msg == "motion_detected":
             with self.sensor_mutex:
-                self._set_reading(0)
                 self.motion_activity_timer = self.MOTION_ACTIVITY_TIMER_SETTING
 
     def execute(self):
-        #This block decreases the timer and set back the reading to false when it gets to 0.
+        #Reading of the Motion sensor is always locked unless motion was recently detected.
         if self.motion_activity_timer == 0:
             with self.sensor_mutex:
-                self._set_reading(1)        #The reading returns to false after the set inactivity period.
-        self.motion_activity_timer -= 1
+                self._set_reading(1)    #The reading returns to false after the set inactivity period.
+
+        #Decreases the timer when motion was recently detected.
+        if self.motion_activity_timer > 0:
+            self._set_reading(0)        # Call to propagate the unlocked reading to _last_reading to ensure the
+                                        # has_changed() return is accurate.
+            self.motion_activity_timer -= 1
 
 class SensorScanner(Thread):
     """ This class will scan the sensors in its own thread
