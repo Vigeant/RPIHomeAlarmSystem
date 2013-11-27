@@ -1,89 +1,99 @@
 # YAML
-#I2C_driver. Currently supported: I2CLCD or I2CBV4618
+# I2C_driver. Currently supported: I2CLCD or I2CBV4618
 I2C_driver: I2CLCD
 
-#lcd_backlight_timer. Delay in sec before the backlight is turned off.  0 to disable (always on).
+# lcd_backlight_timer. Delay in sec before the backlight is turned off.  0 to disable (always on).
 lcd_backlight_timer: 30
 
-#arming grace delay. Delay in seconds.
+# arming grace delay. Delay in seconds.
 arming grace delay: 60
-#disarming grace delay. Delay in seconds.
+# disarming grace delay. Delay in seconds.
 disarming grace delay: 30
 
-#pin. Code sequence to arm/de-arm the system. Number of digits is flexible.
+# delay (in minute) during which the fire detectors will be ignored by the system. "Hush" feature.
+# This feature is enabled by entering the PIN when in StateFire or by using the function (TBD).
+fire_quiet_delay: 10
+
+# pin. Code sequence to arm/de-arm the system. Number of digits is flexible.
 pin: 1234
-#reboot. Code sequence (followed by *) to reboot the system.  Number of digits has to be the same as the pin.
+# reboot. Code sequence (followed by *) to reboot the system.  Number of digits has to be the same as the pin.
 reboot: 1111
 
-#sensor_map.  Each set in the map are as follows:
-#Pin number (GPIO BCM pin number)
-#Sensor Name
-#Symbol name.  Symbol name as to match a symbol in lcd_custom_chars. Alternatively, enter only one character to use directly if no symbol exists.  This symbol is used on the LCD.
-#Pin mode. PULLUP, PULLDOWN, or FLOATING
-#Polling period in millisecond.  The value of the sensor has to be the same 2 readings in a row to be accepted (for debouncing purposes.)
-#normally_closed or normally_opened
-#Sensor type. type_intrusion or type_fire
-#List of states in which the sensor is armed. ANY if the sensor is always armed.
-#disarming grace when armed. (0: disable the grace period, 1: default ("disarming grace delay"), or delay in seconds).
-#Play a sound what the sensor state changes. (play_sound or no_sound)
+# sensor_map.  Each set in the map are as follows:
+# Pin number (GPIO BCM pin number)
+# Sensor Name
+# Symbol name.  Symbol name as to match a symbol in lcd_custom_chars. Alternatively, enter only one character to use directly if no symbol exists.  This symbol is used on the LCD.
+# Pin mode. PULLUP, PULLDOWN, or FLOATING
+# Polling period in millisecond.  The value of the sensor has to be the same 2 readings in a row to be accepted (for debouncing purposes.)
+# normally_closed or normally_opened
+# Sensor type. type_intrusion or type_fire
+# List of states in which the sensor is armed. ANY if the sensor is always armed.
+# disarming grace when armed. (0: disable the grace period, 1: default ("disarming grace delay"), or delay in seconds).
+# Play a sound what the sensor state changes. (1=play_sound, 0=no_sound)
 
-sensor_map: [
-    [22,
-        "DOOR",
-        "door",
-        "PULLUP",
-        300,
-        "normally_closed",
-        "type_intrusion",
-        ["StatePartiallyArmed","StateArmed"],
-        1,
-        "play_sound"
-    ],
-    [17,
-        "PATIO",
-        "patio",
-        "PULLUP",
-        300,
-        "normally_closed",
-        "type_intrusion",
-        ["StatePartiallyArmed","StateArmed"],
-        1,
-        "play_sound"
-    ],
-    [23,
-        "Motion1",
-        "camera",
-        "FLOATING",
-        300,
-        "normally_opened",
-        "type_intrusion",
-        ["StateArmed"],
-        1,
-        "no_sound"
-    ],
-    [4,
-        "GARAGE",
-        "door",
-        "PULLUP",
-        300,
-        "normally_closed",
-        "type_intrusion",
-        ["StatePartiallyArmed","StateArmed"],
-        40,
-        "play_sound"
-    ],
-    [24,
-        "Smoke",
-        "F",
-        "PULLUP",
-        1000,
-        "normally_closed",
-        "type_fire",
-        ["ANY"],
-        0,
-        "no_sound"
+sensor_map:
+    # Set of GPIO Sensors
+    Sensor: [
+        pin: 22
+        name: "DOOR"
+        icon: "door"
+        pin_mode: "PULLUP"
+        polling_period: 250
+        normally_closed: 1
+        armed_states: ["StatePartiallyArmed","StateArmed"]
+        disarming_setting: 1
+        play_sound: 1
+        ,
+        pin: 17
+        name: "PATIO"
+        icon: "patio"
+        pin_mode: "PULLUP"
+        polling_period: 250
+        normally_closed: 1
+        armed_states: ["StatePartiallyArmed","StateArmed"]
+        disarming_setting: 1
+        play_sound: 1
+        ,
+        pin: 23
+        name: "Motion1"
+        icon: "camera"
+        pin_mode: "FLOATING"
+        polling_period: 300
+        normally_closed: 1
+        armed_states: ["StateArmed"]
+        disarming_setting: 0
+        play_sound: 0
+        ,
+        pin: 17
+        name: "GARAGE"
+        icon: "door"
+        pin_mode: "PULLUP"
+        polling_period: 300
+        normally_closed: 1
+        armed_states: ["StatePartiallyArmed","StateArmed"]
+        disarming_setting: 40
+        play_sound: 1
     ]
-]
+    # Set of fire detector sensor
+    FireSensor: [
+        pin: 24
+        name: "Smoke Detectors"
+        icon: "F"
+        pin_mode: "PULLUP"
+        polling_period: 1000
+        normally_closed: 0
+        play_sound: 0
+    ]
+    # Set of motion detection Camera using motion
+    MotionCamera: [
+        name: "Camera 1"
+        icon: "camera"
+        polling_period: 500
+        normally_closed: 1
+        armed_states: ["StateArmed"]
+        disarming_setting: 0
+        play_sound: 0
+    ]
 
 # lcd_custom_chars.
 #   index from 1 to 7

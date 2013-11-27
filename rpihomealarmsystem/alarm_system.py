@@ -211,8 +211,8 @@ class RemoteService(rpyc.Service):
         """ This method allows the alarm_remote to generate events through the pydispatcher.  This is rather unsafe;
         it should be modified to restrict what can actually be done.
         """
-        logger.info("Received remote create_event(): " + signal + ", msg=" + msg)
-        eventQ.put([dispatcher.send, {"signal": signal, "sender": dispatcher.Any, "msg": msg}])
+        logger.info("Received remote create_event(): " + signal_name + ", msg=" + str(msg))
+        eventQ.put([dispatcher.send, {"signal": signal_name, "sender": dispatcher.Any, "msg": msg}])
 
     def exposed_set_alarm_state(self, state_name):  # this is an exposed method
         """ This method allows the alarm_remote to change the state of the AlarmModel. Again, this is rather unsafe;
@@ -231,7 +231,6 @@ class RemoteService(rpyc.Service):
         """
         logger.debug("Received remote get_model().")
         return str(self.model)
-
 
 class AbstractState():
     """ This class is the default behaviour of a state.  As per the name, it is meant to be abstract and
@@ -465,6 +464,7 @@ class AlarmModel():
 
     #-------------------------------------------------------------------
     def keypad_input(self, key):
+
         if key == "":    # System tic
             if self.input_activity > 0:
                 self.input_activity -= 1
@@ -479,8 +479,8 @@ class AlarmModel():
         self.input_activity = self.input_activity_setting
 
         if key == "*" and self.input_string == self.reboot_string:
-            global terminate
-            terminate = True
+            #global terminate
+            #terminate = True
             eventQ.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
             logger.warning("----- Reboot code entered. -----")
         elif key == "*":
@@ -579,7 +579,7 @@ class AlarmModel():
         self.minutes = m
         self.seconds = s
 
-        self.keypad_input("")  # TODO review wtf???
+        self.keypad_input("") #This is used as a "tic" to reset the input_string
         self.alarm_state_machine("tic")
 
         eventQ.put([dispatcher.send, {"signal": "Time Update Model", "sender": dispatcher.Any}])
@@ -587,6 +587,7 @@ class AlarmModel():
     #-------------------------------------------------------------------
     def add_sensor(self, sensor):
         """ Adds a sensor to the model."""
+        logger.debug("AlarmModel adding sensor " + sensor.name + " to sensor_list.")
         self.sensor_list.append(sensor)
 
     #-------------------------------------------------------------------
@@ -639,24 +640,34 @@ class AlarmController():
         dispatcher.connect(self.handle_update_fault, signal="Fault Update", sender=dispatcher.Any,
                            weak=False)
 
+        self.script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
+        logger.info('script_path ' + self.script_path)
+
         alarm_config_dictionary = self.get_config()
 
         #create model (MVC pattern)
         self.model = AlarmModel(alarm_config_dictionary)
 
+        GPIO.setmode(GPIO.BCM)  # using pin numbering of the channel number on the Broadcom chip
+                                # (ie. not the pin number on the connector)
+
         #create sensors
         self.sensor_map = alarm_config_dictionary["sensor_map"]
-        GPIO.setmode(
-            GPIO.BCM) #using pin numbering of the channel number on the Broadcom chip (ie. not the pin number on the connector)
-        for sensor_config in self.sensor_map:
-            self.model.add_sensor(Sensor(self, sensor_config, dedicated_thread=True))
+        #for type in [IntrusionSensor,MotionCamera,FireSensor]: # This is the target code after changes to the
+                                                                # Sensors classes are made
+        for sensor_type in [Sensor, MotionCamera]:
+            for sensor_config in self.sensor_map[sensor_type.__name__]:
+                logger.debug("Raw sensor config: " + str(sensor_config))
+                new_sensor = sensor_type(self, sensor_config)
+                self.model.add_sensor(new_sensor)
+                new_sensor.start()
+
         logger.info("Sensors created")
 
         #create GPIOViews (sirens, light, etc)
         self.output_map = alarm_config_dictionary["output_map"]
         for output_config in self.output_map:
             GPIOView(output_config, self.model)
-            pass
 
         #create View  (MVC pattern)
         LCDView(alarm_config_dictionary, self.model)
@@ -664,10 +675,9 @@ class AlarmController():
         EmailView(alarm_config_dictionary, self.model)
 
         if alarm_config_dictionary["speaker"] == "enable":
-            SoundPlayerView(alarm_config_dictionary, self.model, script_path)
+            SoundPlayerView(alarm_config_dictionary, self.model, self.script_path)
         if alarm_config_dictionary["piezo"] == "enable":
             PiezoView(alarm_config_dictionary, self.model)
-            pass
 
         #create scanners (threads that periodically poll things)
         TimeScanner(self.model)
@@ -690,12 +700,9 @@ class AlarmController():
     
     def get_config(self):
         #read configuration file
-        script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
-        logger.info('script_path ' + script_path)
-
         logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
         try:
-                alarm_config_file = open(script_path + "../../alarm_config.yaml", 'r')
+                alarm_config_file = open(self.script_path + "../../alarm_config.yaml", 'r')
                 alarm_config_dictionary = yaml.load(alarm_config_file)
                 logger.debug("YAML config file loaded succesfully")
                 return alarm_config_dictionary
@@ -704,9 +711,9 @@ class AlarmController():
 
         logger.debug("----- Reverting to JSON config file (alarm_config.json) -----")
         try:
-            alarm_config_file = open(script_path + "../../alarm_config.json", 'r')
+            alarm_config_file = open(self.script_path + "../../alarm_config.json", 'r')
         except:
-            logger.warning("could not open file : " + script_path + "../../alarm_config.json ...")
+            logger.warning("could not open file : " + self.script_path + "../../alarm_config.json ...")
         try:
             alarm_config_dictionary = json.loads(alarm_config_file.read())
             alarm_config_file.close()
@@ -725,13 +732,13 @@ class AlarmController():
         else:
             self.model.keypad_input(msg)
 
+    #--------------------------------------------------------------------------------
+    def handle_update_time(self, msg):
+        self.model.update_time(msg)
+
     def handle_update_fault(self, msg):
         logger.warning("Alarm Fault. msg=" + msg)
         self.model.update_fault(msg)
-
-    #--------------------------------------------------------------------------------
-    def handle_sensor_handler(self, sensor):
-        self.model.update_sensor(sensor)
 
 #####################################################################################
 class KeypadScanner(Thread):
@@ -768,6 +775,7 @@ class KeypadScanner(Thread):
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
                     self.model.keypad_input(key)
+
                 time.sleep(0.1)
 
             except:
@@ -775,51 +783,109 @@ class KeypadScanner(Thread):
                 logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
                 time.sleep(10)
 
-
-class Sensor(Thread):
-    """ This class represents a sensor.
+class AbstractSensor(Thread):
+    """ This class represents an abstract sensor.
     """
-
-    def __init__(self, controller, config, dedicated_thread=False):
+    def __init__(self, controller, config):
         Thread.__init__(self)
         self.daemon = True
         self.sensor_mutex = RLock()
 
         self.controller = controller
         self.model = self.controller.model
-        [self.pin, self.name, self.icon, self.pin_mode, period, self.normally_closed, self.sensor_type, armed_states,
-         disarming_setting, self.play_sound] = config
 
-        self.polling_period = period / 1000.0    #convert to seconds.
+        self.name = config["name"]
+        self.icon = config["icon"]
+        self.polling_period = config["polling_period"] / 1000.0    #convert to seconds.
+
+        #Create a list of actual State classes
+        self.armed_states = []
+        self.armed_states_all = False
+        for state_name in armed_states:
+            if state_name == "ANY":
+                self.armed_states_all = True
+            else:
+                self.armed_states.append(getattr(sys.modules[__name__], state_name))
+
+        #These variable just need to be initialized...
+        self._current_reading = 1       #current valid sensor reading
+        self._last_reading = 1          #previous valid sensor reading
+
+    def __str__(self):
+        return "Sensor(" + self.name + ", polling_period: " + str(self.polling_period) + ", locked: " + \
+               str(self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace)
+
+    def run(self):
+        logger.info("Started: " + str(self))
+        while (True):
+            self.execute()
+            if self.has_changed():
+                if not self.is_locked():
+                    if self.is_armed():
+                        logger.warning("Unlocked: " + str(self))
+                self.model.update_sensor(self)
+            time.sleep(self.polling_period)
+
+    def _set_reading(self, reading):
+        self._last_reading = self._current_reading
+        self._current_reading = reading
+
+    def has_changed(self):
+        return not (self._current_reading == self._last_reading)
+
+    # This is the hook that gets polled.  It should hold the code to read the value if required.
+    def execute(self):
+        pass
+
+    def is_locked(self):
+        return self._current_reading
+
+    def is_armed(self, state=None):
+        # if this sensor is always armed (eg. Smoke Detector)
+        if self.armed_states_all:
+            return True
+
+        # state: by default, it looks at the current state of the model.
+        if state == None:
+            state = self.model.alarm_mode
+
+        for astate in self.armed_states:
+            if isinstance(state, astate):
+                return True
+        return False
+
+    def play_sound(self):
+        return self.play_sound
+
+    #TO BE REMOVE ONCE TYPE IS PROPERLY INCORPORATED IN THE SYSTEM
+    def is_fire_type(self):
+        return isinstance(self,FireSensor)
+
+class Sensor(AbstractSensor):
+    """ This class represents a sensor.
+    """
+    def __init__(self, controller, config):
+        AbstractSensor.__init__(controller, config)
+
+        self.pin = config["pin"]
+        self.pin_mode = config["pin_mode"]
+        self.normally_closed = config["normally_closed"]
+        armed_states = config["armed_states"]
+        disarming_setting = config["disarming_setting"]
+        self.play_sound = config["play_sound"]
 
         if disarming_setting == 1:    #default value ("disarming grace delay")
             self._disarming_grace = self.controller.model.disarming_grace_time
         else:
             self._disarming_grace = disarming_setting
 
-        #Create a list of actual State classes
-        self.armed_states = []
-        self.armed_states_all = False
-        for statename in armed_states:
-            if statename == "ANY":
-                self.armed_states_all = True
-            else:
-                self.armed_states.append(getattr(sys.modules[__name__], statename))
-
-        #These variable just need to be initialized...
-        self._current_reading = 0            #current valid sensor reading
-        self._last_reading = 0            #previous valid sensor reading
-        self._previous_raw_reading = 0    #previous raw reading used for de-bouncing purposes and determine validity
-
+        self._previous_raw_reading = 0  #previous raw reading used for de-bouncing purposes and determine validity
         self.setup()
 
-        if dedicated_thread:
-            self.start()    # start the thread
-
     def __str__(self):
-        return "Sensor(" + self.name + ", polling_period: " + str(self.polling_period) + ", normally closed: " + str(
-            self.is_normally_closed()) + ", reading: " + str(self.get_reading()) + ", locked: " + str(
-            self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace) + ")"
+        return AbstractSensor.__str__(self) + ", pin (mode): " + str(self.pin) + "(" + str(self.pin_mode) + \
+               ") , normally closed: " + str(self._is_normally_closed()) + ", raw reading: " + \
+               str(self.get_reading()) + ")"
 
     def setup(self):
         try:
@@ -834,87 +900,72 @@ class Sensor(Thread):
         except:
             logger.warning("Exception while setting a Sensor.", exc_info=True)
 
-        #GPIO.add_event_detect(int(self.pin), GPIO.BOTH,callback=self.handle_event, bouncetime=1000)	#events will be generated for both raising and falling edges
-        self._read_input() #initialize the value to the current reading
+        self.execute() #initialize the value to the current reading
 
-    def run(self):
-        logger.info("Started: " + str(self))
-        while (True):
-            self._read_input()
-            if self.has_changed():
-                if not self.is_locked():
-                    if self.is_armed():
-                        logger.warning("Unlocked: " + str(self))
-                self.controller.handle_sensor_handler(self)
-            time.sleep(self.polling_period)
-
-    def get_disarming_grace(self):
-        return self._disarming_grace
-
-    def get_reading(self):
-        with self.sensor_mutex:
-            return self._current_reading
-
-    def has_changed(self):
-        return not (self._current_reading == self._last_reading)
-
-    #return (last_reading==self.get_reading())
-
-    def _read_input(self):
+    def execute(self):
         with self.sensor_mutex:
             try:
                 raw_reading = GPIO.input(int(self.pin))
 
                 if raw_reading == self._previous_raw_reading:
-                    self._last_reading = self._current_reading
-                    self._current_reading = self.convert_raw(raw_reading)
+                    self._set_reading(self.convert_raw(raw_reading))
 
                 self._previous_raw_reading = raw_reading
-
-                """
-                self._current_reading=GPIO.input(int(self.pin))
-                """
             except:
                 logger.warning("Exception while reading a Sensor.", exc_info=True)
 
             return self._current_reading
 
     def convert_raw(self, reading):
+        # Convert for pin mode
+        tmp = reading   # assuming "PULLUP"
         if self.pin_mode == "FLOATING":
-            return 1 - reading
+            tmp = 1 - reading
         elif self.pin_mode == "PULLDOWN":
-            return 1 - reading
-        return reading #assuming "PULLUP"
+            tmp = 1 - reading
 
-    def is_locked(self):
-        if self.is_normally_closed():
-            return 1 - self.get_reading()
+        # Convert for normally opened or closed.
+        if self._is_normally_closed():
+            return 1 - tmp
         else:    #normally_opened
-            return self.get_reading()
+            return tmp
 
-    def is_armed(self, state=None):
-        # state: by default, it looks at the current state of the model.
-        if state == None:
-            state = self.model.alarm_mode
+    def _is_normally_closed(self):
+        return self.normally_closed
 
-        # if this sensor is always armed (eg. Smoke Detector)
-        if self.armed_states_all:
-            return True
+    def get_disarming_grace(self):
+        return self._disarming_grace
 
-        for astate in self.armed_states:
-            if isinstance(state, astate):
-                return True
-        return False
+class FireSensor(Sensor):
+    def __init__(self, controller, config):
+        config["armed_states"] = "ANY"
+        Sensor.__init__(controller, config)
 
-    def is_normally_closed(self):
-        return (self.normally_closed == "normally_closed")
+class MotionCamera(AbstractSensor):
+    """ This class represents a Motion Camera (eg. webcam).
+    """
+    def __init__(self, controller, config):
+        AbstractSensor.__init__(self, controller, config)
 
-    def is_fire_type(self):
-        return self.sensor_type == "type_fire"
+        dispatcher.connect(self.handle_event, signal=self.name+" Event", sender=dispatcher.Any,
+                           weak=False)
+        self.motion_activity_timer = 0
+        self.MOTION_ACTIVITY_TIMER_SETTING = 4
 
-    def play_sound(self):
-        return self.play_sound == "play_sound"
+    # possible event: event_start | event_end | motion_detected
+    def handle_event(self, msg):
+        logger.debug(self.name + " receiving event " + msg)
+        if msg == "motion_detected":
+            with self.sensor_mutex:
+                self._set_reading(0)
+                self.motion_activity_timer = self.MOTION_ACTIVITY_TIMER_SETTING
 
+    def execute(self):
+        #This block decreases the timer and set back the reading to false when it gets to 0.
+        if self.motion_activity_timer == 0:
+            with self.sensor_mutex:
+                self._set_reading(1)        #The reading returns to false after the set inactivity period.
+        self.motion_activity_timer -= 1
 
 class SensorScanner(Thread):
     """ This class will scan the sensors in its own thread
@@ -1062,7 +1113,6 @@ class SoundPlayerView():
 
 ###################################################################################
 buzzQ = Queue()
-
 
 class PiezoView():
     """ This class is responsible to play_notes the sounds. And for most bugs"""
@@ -1565,8 +1615,6 @@ class LCDView():
 
 #####################################################################################
 import tty, termios
-
-
 class StdScanner(Thread):
     """ This class will scan standard in on its own thread """
     #--------------------------------------------------------------------------------
@@ -1582,7 +1630,7 @@ class StdScanner(Thread):
         """ Run the keyboard scanner """
         logger.info("StdScanner started")
         global terminate
-        while not terminate:
+        while (not terminate):
             try:
                 key = self.get_key()
                 eventQ.put([dispatcher.send,
