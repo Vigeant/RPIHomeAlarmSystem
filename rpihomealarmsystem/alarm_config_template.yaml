@@ -34,64 +34,76 @@ reboot: 1111
 sensor_map:
     # Set of GPIO Sensors
     Sensor: [
-        pin: 22
-        name: "DOOR"
-        icon: "door"
-        pin_mode: "PULLUP"
-        polling_period: 250
-        normally_closed: 1
-        armed_states: ["StatePartiallyArmed","StateArmed"]
-        disarming_setting: 1
+        {
+        pin: 22,
+        name: "DOOR",
+        icon: "door",
+        pin_mode: "PULLUP",
+        polling_period: 250,
+        normally_closed: 1,
+        armed_states: ["StatePartiallyArmed","StateArmed"],
+        disarming_setting: 1,
         play_sound: 1
+        }
         ,
-        pin: 17
-        name: "PATIO"
-        icon: "patio"
-        pin_mode: "PULLUP"
-        polling_period: 250
-        normally_closed: 1
-        armed_states: ["StatePartiallyArmed","StateArmed"]
-        disarming_setting: 1
+        {
+        pin: 17,
+        name: "PATIO",
+        icon: "patio",
+        pin_mode: "PULLUP",
+        polling_period: 250,
+        normally_closed: 1,
+        armed_states: ["StatePartiallyArmed","StateArmed"],
+        disarming_setting: 1,
         play_sound: 1
+        }
         ,
-        pin: 23
-        name: "Motion1"
-        icon: "camera"
-        pin_mode: "FLOATING"
-        polling_period: 300
-        normally_closed: 1
-        armed_states: ["StateArmed"]
-        disarming_setting: 0
+        {
+        pin: 23,
+        name: "Motion1",
+        icon: "camera",
+        pin_mode: "FLOATING",
+        polling_period: 300,
+        normally_closed: 1,
+        armed_states: ["StateArmed"],
+        disarming_setting: 0,
         play_sound: 0
+        }
         ,
+        {
         pin: 17
-        name: "GARAGE"
-        icon: "door"
-        pin_mode: "PULLUP"
-        polling_period: 300
-        normally_closed: 1
-        armed_states: ["StatePartiallyArmed","StateArmed"]
-        disarming_setting: 40
+        name: "GARAGE",
+        icon: "door",
+        pin_mode: "PULLUP",
+        polling_period: 300,
+        normally_closed: 1,
+        armed_states: ["StatePartiallyArmed","StateArmed"],
+        disarming_setting: 40,
         play_sound: 1
+        }
     ]
     # Set of fire detector sensor
     FireSensor: [
-        pin: 24
-        name: "Smoke Detectors"
-        icon: "F"
-        pin_mode: "PULLUP"
-        polling_period: 1000
-        normally_closed: 0
+        {
+        pin: 24,
+        name: "Smoke Detectors",
+        icon: "F",
+        pin_mode: "PULLUP",
+        polling_period: 1000,
+        normally_closed: 0,
         play_sound: 0
+        ]
     ]
     # Set of motion detection Camera using motion
     MotionCamera: [
-        name: "Camera 1"
-        icon: "camera"
-        polling_period: 500
-        armed_states: ["StateArmed"]
-        disarming_setting: 0
+        {
+        name: "Camera 1",
+        icon: "camera",
+        polling_period: 500,
+        armed_states: ["StateArmed"],
+        disarming_setting: 0,
         play_sound: 0
+        }
     ]
 
 # lcd_custom_chars.
