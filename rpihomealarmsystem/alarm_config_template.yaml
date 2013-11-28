@@ -10,14 +10,15 @@ arming grace delay: 60
 # disarming grace delay. Delay in seconds.
 disarming grace delay: 30
 
+# (!Not implemented yet!)
 # delay (in minute) during which the fire detectors will be ignored by the system. "Hush" feature.
-# This feature is enabled by entering the PIN when in StateFire or by using the function (TBD).
+# This feature is enabled by entering the PIN when in StateFire or by using the function.
 fire_quiet_delay: 10
 
 # pin. Code sequence to arm/de-arm the system. Number of digits is flexible.
-pin: 1234
+pin: "1234"
 # reboot. Code sequence (followed by *) to reboot the system.  Number of digits has to be the same as the pin.
-reboot: 1111
+reboot: "1111"
 
 # sensor_map.  Each set in the map are as follows:
 # Pin number (GPIO BCM pin number)
@@ -92,7 +93,7 @@ sensor_map:
         polling_period: 1000,
         normally_closed: 0,
         play_sound: 0
-        ]
+        }
     ]
     # Set of motion detection Camera using motion
     MotionCamera: [

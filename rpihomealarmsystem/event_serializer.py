@@ -6,14 +6,18 @@ import logging
 
 event_q = Queue()
 
-signal_log_level_dict = {"Time Update Model": logging.NOTSET,
+signal_log_level_dict = {"Alarm Message": logging.INFO,
+                         "Time Update Model": logging.NOTSET,
                          "Weather Update": logging.INFO,
+                         "Weather Update Model": logging.DEBUG,
+                         "Fault Update": logging.DEBUG,
                          "Fault Update Model": logging.WARNING,
                          "Input String Update Model": logging.DEBUG,
                          "Alarm Message": logging.INFO,
                          "Alarm Mode Update Model": logging.DEBUG,
                          "Grace Update Model": logging.NOTSET,
                          "Sensor Update Model": logging.DEBUG,
+                         "Reboot": logging.WARNING,
                          "Terminate": logging.WARNING}
 
 
