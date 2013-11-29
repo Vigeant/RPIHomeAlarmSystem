@@ -17,6 +17,7 @@ signal_log_level_dict = {"Alarm Message": logging.INFO,
                          "Alarm Mode Update Model": logging.DEBUG,
                          "Grace Update Model": logging.NOTSET,
                          "Sensor Update Model": logging.DEBUG,
+                         "BIT": logging.INFO,
                          "Reboot": logging.WARNING,
                          "Terminate": logging.WARNING}
 

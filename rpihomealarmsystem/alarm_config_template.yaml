@@ -17,8 +17,18 @@ fire_quiet_delay: 10
 
 # pin. Code sequence to arm/de-arm the system. Number of digits is flexible.
 pin: "1234"
-# reboot. Code sequence (followed by *) to reboot the system.  Number of digits has to be the same as the pin.
-reboot: "1111"
+# guest_pin.  Same as pin but will trigger additional logging & notification
+guest_pin: "4321"
+
+# Functions. The digit sequence to call the corresponding function.  The sequence has to be followed by a * to be used.
+# Number of digits has to be the same length as the pin or shorter.
+functions:
+    "": partial_arm
+    "0": delayed_partial_arm
+    "1": display_statistics
+    "1111": reboot
+    "2222": built_in_test
+
 
 # sensor_map.  Each set in the map are as follows:
 # Pin number (GPIO BCM pin number)
@@ -153,8 +163,9 @@ smtp_pass: pswd
 addr_list: ["mom@gmail.com","dad@gmail.com"]
 piezo: disable
 speaker: enable
-button_wav: sounds/button.wav
-alarm_wav: sounds/siren.wav
-grace_beeps: sounds/grace_beeps.wav
-grace_beeps3: sounds/grace_beeps3.wav
-grace_chirp: sounds/grace_chirp.wav
+sounds:
+    button_wav: sounds/button.wav
+    alarm_wav: sounds/siren.wav
+    grace_beeps: sounds/grace_beeps.wav
+    grace_beeps3: sounds/grace_beeps3.wav
+    grace_chirp: sounds/grace_chirp.wav

@@ -25,6 +25,7 @@ Features
 "Alarm Mode Update Model"
 "Grace Update Model"
 "Sensor Update Model"
+"BIT"
 "Reboot"
 "Terminate"
 
@@ -55,8 +56,10 @@ import gdata.calendar
 import gdata.calendar.service
 from pydispatch import dispatcher
 import rpyc
-from alarm_model import AlarmModel
-from alarm_model import Sensor,FireSensor,MotionCamera
+#from alarm_model import AlarmModel
+#from alarm_model import Sensor,FireSensor,MotionCamera
+# This import should be fine if we keep the module clean.
+from alarm_model import *
 from event_serializer import EventSerializer,event_q
 
 network_is_alive = True
@@ -65,11 +68,11 @@ lcd_init_required = False
 class TimeScanner(Thread):
     """ This class scans and publishes the time in its own thread.  A "Time Update" event is generated every second. """
     #------------------------------------------------------------------------------
-    def __init__(self, model):
+    def __init__(self):
         """ Init the time scanner """
         Thread.__init__(self)
         self.daemon = True
-        self.model = model
+        self.model = AlarmModel.getInstance()
         self.start()
 
     #-------------------------------------------------------------------
@@ -86,11 +89,13 @@ class TimeScanner(Thread):
 class WeatherScanner(Thread):
     """ This class scans the weather in its own thread. A "Weather Update" event is generated every 5 minutes. """
 
-    def __init__(self, alarm_config_dictionary, model):
+    def __init__(self):
         """ Init the weather scanner """
         Thread.__init__(self)
-        self.model = model
+        self.model = AlarmModel.getInstance()
         self.daemon = True
+        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
+
         self.url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
                    + "/geolookup/conditions/q/" + alarm_config_dictionary["wunderground location"] + ".json"
         #self.forecast_url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"] +/
@@ -118,23 +123,27 @@ class WeatherScanner(Thread):
 
             time.sleep(300)
 
+    def handle_BIT(self):
+        logger.info("WeatherScanner BIT")
+        assert self.isAlive()
 
 class NetworkMonitorScanner(Thread):
     """ This class verifies the network connectivity periodically. """
     #------------------------------------------------------------------------------
-    def __init__(self, model):
+    def __init__(self):
         """ Init the NetworkMonitor scanner """
         Thread.__init__(self)
-
-        self.model = model
+        self.model = AlarmModel.getInstance()
         self.daemon = True
+        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
+
         self.url = 'http://74.125.228.100'
-        self.is_alive = True
         self.start()
 
     #-------------------------------------------------------------------
     def run(self):
         global network_is_alive
+        network_is_alive = True
         logger.info("NetworkMonitor started")
         while True:
             is_alive = self.check_connectivity(self.url)
@@ -161,27 +170,51 @@ class NetworkMonitorScanner(Thread):
             pass
         return False
 
+    def handle_BIT(self):
+        logger.info("NetworkMonitorScanner BIT")
+        logger.info("url: " + self.url)
+        logger.info("network_is_alive: " + str(network_is_alive))
+        assert self.isAlive()
+
 
 class AlarmRemote(Thread):
     """ This class creates a simple thread that contains the RemoteService. """
 
-    def __init__(self, model):
+    def __init__(self):
         Thread.__init__(self)
         self.daemon = True
-        RemoteService.model = model
+        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.handle_test, signal="AlarmRemote Test", sender=dispatcher.Any, weak=False)
+
         self.start()
 
     def run(self):
         logger.info("AlarmRemote started")
         from rpyc.utils.server import ThreadedServer
 
-        t = ThreadedServer(RemoteService, port=18861)
-        t.start()
+        self.t = ThreadedServer(RemoteService, port=18861)
+        self.t.start()
 
+    def handle_BIT(self):
+        logger.info("AlarmRemote BIT")
+        assert self.isAlive()
+        logger.info("Ensuring RemoteService is also alive.")
+        assert self.t.isAlive()
+        logger.info("Testing RemoteService exposed_get_model.")
+        logger.info(self.t.exposed_get_model())
+        logger.info("Testing RemoteService exposed_create_event.")
+        self.test_flag = False
+        self.t.exposed_create_event("AlarmRemote Test","")
+        time.sleep(1)
+        assert self.test_flag
+        logger.info("Test signal received.")
+        self.test_flag = False
+
+    def handle_test(self):
+        self.test_flag = True
 
 class RemoteService(rpyc.Service):
     """ This class uses rpyc to provide access to and control of the RPIAlarmSystem """
-    model = None
 
     def on_connect(self):
         # code that runs when a connection is created
@@ -207,7 +240,7 @@ class RemoteService(rpyc.Service):
         logger.info("Received remote set_alarm_state() to state: " + state_name)
         try:
             State = getattr(sys.modules[__name__], state_name)
-            self.model.alarm_mode.set_state(State())
+            AlarmModel.getInstance().alarm_mode.set_state(State())
         except:
             logger.warning("State is invalid: " + state_name)
 
@@ -215,7 +248,7 @@ class RemoteService(rpyc.Service):
         """ This method simply returns an AlarmModel string containing its current state.
         """
         logger.debug("Received remote get_model().")
-        return str(self.model)
+        return str(AlarmModel.getInstance())
 
 ###################################################################################
 class AlarmController():
@@ -267,13 +300,12 @@ class AlarmController():
             pass
 
         #create scanners (threads that periodically poll things)
-        TimeScanner(self.model)
-        #SensorScanner(alarm_config_dictionary,self,self.model)  #Not required when the Sensors run each on a thread.
-        KeypadScanner(self.model.alarm_config_dictionary, self.model)
+        TimeScanner()
+        KeypadScanner()
         #StdScanner(alarm_config_dictionary,self.model)
-        WeatherScanner(self.model.alarm_config_dictionary, self.model)
-        NetworkMonitorScanner(self.model)
-        AlarmRemote(self.model) #create the Thread that serves as a remote controller
+        WeatherScanner()
+        NetworkMonitorScanner()
+        AlarmRemote() #create the Thread that serves as a remote controller
 
         logger.info("AlarmController started")
          
@@ -284,44 +316,8 @@ class AlarmController():
         terminate = True
         event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
         logger.warning("----- Reboot code entered. -----")
-    
-    def get_config(self):
-        #read configuration file
-        script_path = os.path.dirname(os.path.abspath(__file__)) + "/"
-        logger.info('script_path ' + script_path)
 
-        logger.debug("----- Loading YAML config file (alarm_config.yaml) -----")
-        try:
-                alarm_config_file = open(script_path + "../../alarm_config.yaml", 'r')
-                alarm_config_dictionary = yaml.load(alarm_config_file)
-                logger.debug("YAML config file loaded succesfully")
-                return alarm_config_dictionary
-        except:
-            logger.warning("Error while reading YAML config file.", exc_info=True)
-
-        logger.debug("----- Reverting to JSON config file (alarm_config.json) -----")
-        try:
-            alarm_config_file = open(script_path + "../../alarm_config.json", 'r')
-        except:
-            logger.warning("could not open file : " + script_path + "../../alarm_config.json ...")
-        try:
-            alarm_config_dictionary = json.loads(alarm_config_file.read())
-            alarm_config_file.close()
-            return alarm_config_dictionary
-        except ValueError:
-            logger.warning("Error while reading JSON config file. Your alarm_config.json file seems to be corrupted...", exc_info=True)
-            exit
-
-    #--------------------------------------------------------------------------------
-    def handle_keypad_input(self, msg):
-        if msg == "*" and self.model.input_string == self.reboot_string:
-            global terminate
-            terminate = True
-            event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
-            logger.warning("----- Reboot code entered. -----")
-        else:
-            self.model.keypad_input(msg)
-
+    # This is required for the apcupsd faults.
     def handle_update_fault(self, msg):
         logger.warning("Alarm Fault. msg=" + msg)
         self.model.update_fault(msg)
@@ -335,6 +331,8 @@ class KeypadScanner(Thread):
         Thread.__init__(self)
         self.daemon = True
         self.model = model
+        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
+
         try:
             driver = alarm_config_dictionary["I2C_driver"]
             logger.debug("I2C_driver: " + driver)
@@ -370,55 +368,9 @@ class KeypadScanner(Thread):
                 #logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
                 time.sleep(10)
 
-"""	Original Code
-#####################################################################################
-class SensorScanner(Thread):
-	# This class will scan the sensors in its own thread 
-	#------------------------------------------------------------------------------
-	def __init__(self,alarm_config_dictionary):
-		# Init the sensor scanner 
-		Thread.__init__(self)
-		self.daemon = True
-		self.closed,self.open  = range(2)
-
-		#initialize state of each pin
-		self.sensor_state = alarm_config_dictionary["sensor_map"].copy()
-		self.sensor_map = alarm_config_dictionary["sensor_map"].copy()
-		
-		for pin,state in self.sensor_state.iteritems():   
-			self.sensor_state[pin] = 3
-
-		GPIO.setmode(GPIO.BCM) #using pin numbering of the channel number on the Broadcom chip (ie. not the pin number on the connector) 
-		self.gpio_setup()
-
-		self.start()	# start the thread
-		
-	#------------------------------------------------------------------------------
-	def gpio_setup(self):
-		
-		for sensor_config in self.sensor_map.iteritems():
-			Sensor(sensor_config)
-
-			
-	#------------------------------------------------------------------------------
-	def run(self):
-		# Run the sensor scanner 
-		print("SensorScanner started")
-		while(True):
-			for pin,[sensor_name,position,pin_mode] in self.sensor_map.iteritems():
-				_current_reading = GPIO.input(int(pin))
-				if pin_mode == "PULLUP":
-					pass
-				elif pin_mode == "FLOATING":
-					_current_reading = 1 - _current_reading
-				elif pin_mode == "PULLDOWN":
-					_current_reading = 1 - _current_reading
-				
-				if not _current_reading == self.sensor_state[pin]:
-					self.sensor_state[pin] = _current_reading
-					event_q.put([dispatcher.send,{"signal":"Sensor Changed", "sender":dispatcher.Any, "msg":[pin,self.sensor_state[pin]]}])
-			time.sleep(0.2)
-"""
+    def handle_BIT(self):
+        logger.info("KeypadScanner BIT")
+        assert self.isAlive()
 
 ###################################################################################
 class SoundPlayerView():
@@ -426,16 +378,17 @@ class SoundPlayerView():
 
     #------------------------------------------------------------------------------
     def __init__(self):
+        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
         self.model = AlarmModel.getInstance()
         self.script_path = self.model.script_path
-        self.alarm_config = self.model.alarm_config_dictionary
+        self.sound_config = self.model.alarm_config_dictionary["sounds"]
 
         try:
-            logger.debug("button_wav: " + self.alarm_config["button_wav"])
-            logger.debug("alarm_wav: " + self.alarm_config["alarm_wav"])
-            logger.debug("grace_beeps: " + self.alarm_config["grace_beeps"])
-            logger.debug("grace_beeps3: " + self.alarm_config["grace_beeps3"])
-            logger.debug("grace_chirp: " + self.alarm_config["grace_chirp"])
+            logger.debug("button_wav: " + self.sound_config["button_wav"])
+            logger.debug("alarm_wav: " + self.sound_config["alarm_wav"])
+            logger.debug("grace_beeps: " + self.sound_config["grace_beeps"])
+            logger.debug("grace_beeps3: " + self.sound_config["grace_beeps3"])
+            logger.debug("grace_chirp: " + self.sound_config["grace_chirp"])
         except:
             logger.info("SoundPlayerView cannot be configured properly. ", exc_info=True)
             return
@@ -463,7 +416,7 @@ class SoundPlayerView():
     def play_grace_timer(self, msg):
         alarm_mode = self.model.alarm_mode
         if str(alarm_mode) == "StateArming":
-            if msg == self.alarm_config["arming grace delay"]:
+            if msg == self.sound_config["arming grace delay"]:
                 pass
             elif msg > 10:
                 self.play_notes("grace_beeps")
@@ -493,11 +446,16 @@ class SoundPlayerView():
 
     def play_notes(self, string):
         with self.lock:                      # Begin critical section
-            subprocess.Popen(['aplay', '-q', self.script_path + self.alarm_config[string]])
+            subprocess.Popen(['aplay', '-q', self.script_path + self.sound_config[string]])
+
+    def handle_BIT(self):
+        logger.info("SoundPlayerView BIT")
+        logger.info("Playing all sound files.")
+        for a_string in self.sound_config.values():
+            subprocess.Popen(['aplay', '-q', self.script_path + a_string])
 
 ###################################################################################
 buzzQ = Queue()
-
 
 class PiezoView():
     """ This class is responsible to play_notes the sounds. And for most bugs"""
@@ -620,7 +578,6 @@ class BuzzPlayer(Thread):
         self.continuous_string = self.default_string
         self.play_notes(self.continuous_string)
 
-
 class LCDView():
     def __init__(self):
         self.model = AlarmModel.getInstance()
@@ -697,11 +654,12 @@ class LCDView():
         dispatcher.connect(self.update_grace_timer, signal="Grace Update Model",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
 
         signal.signal(signal.SIGUSR1, self.update_ui_file)
         self.ui_file_path = os.path.dirname(os.path.abspath(__file__)) + "/"
 
-        # TODO This should be updated so that it is not hard coded...  Once the LCD
+        # TODO: This table should be updated so that it is not hard coded...  Once the LCD
         # is up and running, the table should be built using the lcd get_char()
         self.table = string.maketrans(
             chr(128) + chr(129) + chr(130) + chr(131) + chr(132) + chr(133) + chr(134) + chr(135) + chr(0) + chr(
@@ -1001,6 +959,27 @@ class LCDView():
             self.lcd_backlight_timer = self.lcd_backlight_timer_setting
         self.set_backlight(True)
 
+    def handle_BIT(self):
+        logger.info("LCDView BIT")
+
+        # Test all arrows
+        arrow_chars = self.lcd.get_char("arrow")
+        for dir in ["SOUTH_WEST","WEST","NORTH_WEST","NORTH","NORTH_EAST","EAST","SOUTH_EAST"]:
+            self.wind_dir_arrow(dir)
+            self.update_msg(arrow_chars)
+            time.sleep(.5)
+        # Displaying custom chars on the LCD.
+        custom_chars=""
+        for [index, data, symbol] in self.lcd_custom_chars:
+            custom_chars += self.lcd.get_char(symbol)
+        self.update_msg(custom_chars)
+
+        # Redraw everything on the LCD.
+        self.draw_sensors()
+        self.update_weather("")
+        self.update_time()
+        self.update_alarm_mode()
+
 #####################################################################################
 import tty, termios
 class StdScanner(Thread):
@@ -1230,7 +1209,7 @@ class SMSView():
         event.content = atom.Content(text=message)
         event.where.append(gdata.calendar.Where(value_string="Home"))
         
-        # TODO.  We need to find a more elegant way of doing this.  The event should be created with the actual time 
+        # TODO.  We need to find a more elegant way of doing this.  The event should be created with the actual time
         # it happens...  This extra 60 second is to ensure the reminder is received.
         start_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()+60))
 
@@ -1482,6 +1461,7 @@ class EmailSender(Thread):
 class GPIOView():
     #-------------------------------------------------------------------
     def __init__(self, output_config):
+        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
         self.model = AlarmModel.getInstance()
 
         [self.pin, self.name, normal_pin_value, self.states_on, self.states_from] = output_config
@@ -1535,6 +1515,15 @@ class GPIOView():
             return True
         return state in self.states_from
 
+    def handle_BIT(self):
+        self.model.broadcast_message("BIT Output: " + self.name)
+        GPIO.output(self.pin, self.normal_pin_value ^ 1)
+        time.sleep(.5)
+        GPIO.output(self.pin, self.normal_pin_value)
+        time.sleep(1)
+        GPIO.output(self.pin, self.normal_pin_value ^ 1)
+        time.sleep(.5)
+        GPIO.output(self.pin, self.normal_pin_value)
 
 # Run the program
 if __name__ == "__main__":

@@ -234,6 +234,7 @@ class AlarmModel(Singleton):
         self.minutes = 0
         self.seconds = 0
         self.pin = str(self.alarm_config_dictionary["pin"])
+        self.guest_pin = str(self.alarm_config_dictionary["guest_pin"])
 
         self.script_path = ""
 
@@ -248,7 +249,8 @@ class AlarmModel(Singleton):
         self.input_activity_setting = 4
 
         self.sensor_list = []
-        self.reboot_string = str(self.alarm_config_dictionary["reboot"])
+
+        self.function_dict = self.alarm_config_dictionary["functions"]
 
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
@@ -291,8 +293,13 @@ class AlarmModel(Singleton):
 
     #-------------------------------------------------------------------
     def keypad_input(self, key):
+        # TODO:
+        # Guest PIN
+        # Print System's uptime
+        # Display last events
+        # Initiate BIT
 
-        # System tic.  This is used to reset the input string after a set delay.
+        # System tic.  This is used to reset the input string after a set delay (self.input_activity_setting).
         if key == "":
             if self.input_activity > 0:
                 self.input_activity -= 1
@@ -306,39 +313,35 @@ class AlarmModel(Singleton):
 
         self.input_activity = self.input_activity_setting
 
-        if key == "*" and self.input_string == self.reboot_string:
-            global terminate
-            terminate = True
-            event_q.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
-            logger.warning("----- Reboot code entered. -----")
-        elif key == "*":
-            self.input_string = ""
-            self.display_string = ""
-            self.alarm_state_machine("*")
-
-        #elif key == "#" or len(self.input_string)> 8:
+        # Function key.
+        if key == "*":
+            if self.function_dict.has_key(self.input_string):
+                self.input_string = ""
+                self.display_string = ""
+                # Those functions could be part of the State.  The methods can be easily moved in the state.
+                getattr(self, "function_"+self.function_dict[self.input_string])()
+        # Input_string reset
         elif key == "#":
             self.input_string = ""
             self.display_string = ""
+        # Append the key to the input_string
         else:
             if len(self.input_string) == len(self.pin):
                 self.input_string = self.input_string[1:]
             else:
                 self.display_string += "*"
             self.input_string += key
-
         logger.debug("Input string: " + self.input_string)
 
-        event_q.put([dispatcher.send,
-                    {"signal": "Input String Update Model", "sender": dispatcher.Any,
+        event_q.put([dispatcher.send, {"signal": "Input String Update Model", "sender": dispatcher.Any,
                      "msg": self.display_string}])
 
-        if self.input_string == self.pin:
-            level = logger.info("PIN entered.")
+        # Check if the input_string matches the pin
+        if self.input_string == self.pin or self.input_string == self.guest_pin:
             self.broadcast_message("PIN entered.")
             self.input_string = ""
             self.display_string = ""
-            self.alarm_state_machine("PIN")
+            self.function_arm()
 
     def alarm_state_machine(self, event_type, sensor=None):
         self.alarm_mode.handle_event(event_type, sensor)
@@ -370,7 +373,6 @@ class AlarmModel(Singleton):
             self.wind_dir = "SOUTH_EAST"
         else:                            #SOUTH
             self.wind_dir = "SOUTH"
-
         event_q.put([dispatcher.send, {"signal": "Weather Update Model", "sender": dispatcher.Any,
                                       "msg": [self.temp_c, self.wind_dir, self.wind_kph]}])
 
@@ -399,7 +401,7 @@ class AlarmModel(Singleton):
         self.minutes = m
         self.seconds = s
 
-        self.keypad_input("")  # TODO review wtf???
+        self.keypad_input("")  # This call is a "tic" for the keypad which is used to reset the input_string.
         self.alarm_state_machine("tic")
 
         event_q.put([dispatcher.send, {"signal": "Time Update Model", "sender": dispatcher.Any}])
@@ -438,9 +440,31 @@ class AlarmModel(Singleton):
         return sensor_state_string
 
     def broadcast_message(self, msg):
+        logger.info("Alarm Message: " + msg)
         self.last_message = msg
         event_q.put(
             [dispatcher.send, {"signal": "Alarm Message", "sender": dispatcher.Any, "msg": msg}])
+
+    def function_arm(self):
+        self.alarm_state_machine("PIN")
+
+    def function_reboot(self):
+        event_q.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
+        logger.warning("----- Reboot code entered. -----")
+
+    def function_partial_arm(self):
+        self.alarm_state_machine("*")
+
+    def function_delayed_partial_arm(self):
+        pass
+
+    def function_display_statistics(self):
+        # Display uptime
+        # RAM, diskspace, CPU, etc
+        pass
+
+    def function_built_in_test(self):
+        BuiltInTest()
 
 class AbstractState():
     """ This class is the default behaviour of a state.  As per the name, it is meant to be abstract and
@@ -609,6 +633,44 @@ class StateFire(AbstractState):
         elif event_type == "fire":    # leaving StateFire if there is no longer an unlocked fire detector
             if self.model.check_sensors_locked(sensor_type=FireSensor):
                 self.set_state(StateIdle())
+
+class Testable():
+
+    def do_BIT(self):
+        pass
+
+class BuiltInTest(Thread):
+    def __init__(self):
+        Thread.__init__(self)
+        self.model = AlarmModel.getInstance()
+        self.daemon = True
+        self.start()
+
+    def run(self):
+        self.model.broadcast_message("- Starting BIT -")
+
+        # Output the config
+        logger.info("--- Alarm config Dump ---")
+        logger.info(yaml.dump(self.alarm_config_dictionary))
+        # Output the AlarmModel
+        logger.info("--- AlarmModel ---")
+        logger.info(str(self.model))
+
+        # Save the current state of the system to return to the same state after the BIT.
+        saved_state = self.model.alarm_mode
+
+        # Iterate through AlarmModel States.
+
+        # Check all Sensors by forcing their current values.
+        for sensor in self.model.sensor_list:
+            sensor._set_reading(0)  #unlock
+
+            sensor._set_reading(1)  #lock
+
+        # Sending Event to trigger BIT for all the Views.
+        event_q.put([dispatcher.send, {"signal": "BIT", "sender": dispatcher.Any, }])
+
+        self.model.broadcast_message("- BIT Completed -")
 
 
 #############################################################################################
