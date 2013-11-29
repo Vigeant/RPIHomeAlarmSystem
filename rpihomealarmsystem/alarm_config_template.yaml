@@ -157,4 +157,4 @@ button_wav: sounds/button.wav
 alarm_wav: sounds/siren.wav
 grace_beeps: sounds/grace_beeps.wav
 grace_beeps3: sounds/grace_beeps3.wav
-grace_chirp: sounds/grace_beeps.wav
+grace_chirp: sounds/grace_chirp.wav

@@ -10,6 +10,200 @@ from threading import RLock
 from threading import Thread
 import RPi.GPIO as GPIO
 
+class AbstractSensor(Thread):
+    """ This class represents an abstract sensor.
+    """
+    def __init__(self, config):
+        Thread.__init__(self)
+        self.daemon = True
+        self.sensor_mutex = RLock()
+
+        self.model = AlarmModel.getInstance()
+
+        self.name = config["name"]
+        self.icon = config["icon"]
+        self.polling_period = config["polling_period"] / 1000.0    #convert to seconds.
+        armed_states = config["armed_states"]
+        disarming_setting = config["disarming_setting"]
+        self.play_sound = config["play_sound"]
+
+        #Create a list of actual State classes
+        self.armed_states = []
+        self.armed_states_all = False
+        for state_name in armed_states:
+            if state_name == "ANY":
+                self.armed_states_all = True
+            else:
+                self.armed_states.append(getattr(sys.modules[__name__], state_name))
+
+        if disarming_setting == 1:    #default value ("disarming grace delay")
+            self._disarming_grace = self.model.disarming_grace_time
+        else:
+            self._disarming_grace = disarming_setting
+
+        #These variable just need to be initialized...
+        self._current_reading = 1       #current valid sensor reading
+        self._last_reading = 1          #previous valid sensor reading
+
+    def __str__(self):
+        return self.__class__.__name__ + "(" + self.name + ", polling_period: " + str(self.polling_period) + ", locked: " + \
+               str(self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace)
+
+    def run(self):
+        logger.info("Started: " + str(self))
+        while (True):
+            self.execute()
+            if self.has_changed():
+                if not self.is_locked():
+                    if self.is_armed():
+                        logger.warning("Unlocked: " + str(self))
+                self.model.update_sensor(self)
+            time.sleep(self.polling_period)
+
+    def _set_reading(self, reading):
+        with self.sensor_mutex:
+            self._last_reading = self._current_reading
+            self._current_reading = reading
+
+    def get_reading(self):
+        with self.sensor_mutex:
+            return self._current_reading
+
+    def has_changed(self):
+        return not (self._current_reading == self._last_reading)
+
+    # This is the hook that gets polled.  It should hold the code to read the value if required.
+    def execute(self):
+        pass
+
+    def is_locked(self):
+        return self._current_reading
+
+    def is_armed(self, state=None):
+        # if this sensor is always armed (eg. Smoke Detector)
+        if self.armed_states_all:
+            return True
+
+        # state: by default, it looks at the current state of the model.
+        if state == None:
+            state = self.model.alarm_mode
+
+        for astate in self.armed_states:
+            if isinstance(state, astate):
+                return True
+        return False
+
+    def has_sound(self):
+        return self.play_sound
+
+
+class Sensor(AbstractSensor):
+    """ This class represents a sensor.
+    """
+    def __init__(self, config):
+        AbstractSensor.__init__(self, config)
+
+        self.pin = config["pin"]
+        self.pin_mode = config["pin_mode"]
+        self.normally_closed = config["normally_closed"]
+
+        self._previous_raw_reading = 0  #previous raw reading used for de-bouncing purposes and determine validity
+        self.setup()
+
+    def __str__(self):
+        return AbstractSensor.__str__(self) + ", pin(mode): " + str(self.pin) + "(" + str(self.pin_mode) + \
+               ") , normally closed: " + str(self._is_normally_closed()) + ")"
+
+    def setup(self):
+        try:
+            temp_mode = GPIO.PUD_UP
+            if self.pin_mode == "PULLUP":
+                temp_mode = GPIO.PUD_UP
+            elif self.pin_mode == "FLOATING":
+                temp_mode = GPIO.PUD_UP
+            elif self.pin_mode == "PULLDOWN":
+                temp_mode = GPIO.PUD_DOWN
+            GPIO.setup(int(self.pin), GPIO.IN, pull_up_down=temp_mode)
+        except:
+            logger.warning("Exception while setting a Sensor.", exc_info=True)
+
+        self.execute() #initialize the value to the current reading
+
+    def execute(self):
+        with self.sensor_mutex:
+            try:
+                raw_reading = GPIO.input(int(self.pin))
+
+                if raw_reading == self._previous_raw_reading:
+                    self._set_reading(self.convert_raw(raw_reading))
+                else:
+                    self._set_reading(self.get_reading())   # The reading stays the same.  We have to call _set_reading
+                                                            # in order to ensure has_changed() is functioning properly.
+                self._previous_raw_reading = raw_reading
+            except:
+                logger.warning("Exception while reading a Sensor.", exc_info=True)
+
+    def convert_raw(self, reading):
+        # Convert for pin mode
+        tmp = reading   # assuming "PULLUP"
+        if self.pin_mode == "FLOATING":
+            tmp = 1 - reading
+        elif self.pin_mode == "PULLDOWN":
+            tmp = 1 - reading
+
+        # Convert for normally opened or closed.
+        if self._is_normally_closed():
+            return 1 - tmp
+        else:    #normally_opened
+            return tmp
+
+    def _is_normally_closed(self):
+        return self.normally_closed
+
+    def get_disarming_grace(self):
+        return self._disarming_grace
+
+class FireSensor(Sensor):
+    def __init__(self, config):
+        config["armed_states"] = ["ANY"]
+        config["disarming_setting"] = 0
+        Sensor.__init__(self, config)
+
+
+class MotionCamera(AbstractSensor):
+    """ This class represents a Motion Camera (eg. webcam).
+    """
+    def __init__(self, config):
+        AbstractSensor.__init__(self, config)
+
+        dispatcher.connect(self.handle_event, signal=self.name+" Event", sender=dispatcher.Any,
+                           weak=False)
+        self.motion_activity_timer = 0
+        self.MOTION_ACTIVITY_TIMER_SETTING = 4
+
+    def __str__(self):
+        return AbstractSensor.__str__(self) + ", MOTION_ACTIVITY_TIMER_SETTING=" + \
+               str(self.MOTION_ACTIVITY_TIMER_SETTING) + ")"
+
+    # possible event: event_start | event_end | motion_detected
+    def handle_event(self, msg):
+        logger.debug(self.name + " receiving event " + msg)
+        if msg == "motion_detected":
+            with self.sensor_mutex:
+                self.motion_activity_timer = self.MOTION_ACTIVITY_TIMER_SETTING
+
+    def execute(self):
+        #Reading of the Motion sensor is always locked unless motion was recently detected.
+        if self.motion_activity_timer == 0:
+            with self.sensor_mutex:
+                self._set_reading(1)    #The reading returns to false after the set inactivity period.
+
+        #Decreases the timer when motion was recently detected.
+        if self.motion_activity_timer > 0:
+            self._set_reading(0)        # Call to propagate the unlocked reading to _last_reading to ensure the
+                                        # has_changed() return is accurate.
+            self.motion_activity_timer -= 1
+
 class AlarmModel(Singleton):
     """ This class is the Model in the MVC pattern and contains all the info for
     the alarm system. The model is not aware of any API and only communicates
@@ -59,6 +253,7 @@ class AlarmModel(Singleton):
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
 
+        self.time_started = time.time()
         logger.info("AlarmModel initialized")
 
     def get_config(self):
@@ -78,6 +273,7 @@ class AlarmModel(Singleton):
 
     def __str__(self):
         model_string = "AlarmModel:\n"
+        model_string += "Started Time: " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self.time_started)) + "\n"
         model_string += "Current Time: {:0>2}:{:0>2}".format(self.hours, self.minutes) + "\n"
         model_string += "Temperature: " + str(self.temp_c) + "\n"
         model_string += "Wind direction: " + str(self.wind_dir) + " (" + str(self.wind_deg) + "deg) \n"
@@ -95,7 +291,9 @@ class AlarmModel(Singleton):
 
     #-------------------------------------------------------------------
     def keypad_input(self, key):
-        if key == "":    # System tic
+
+        # System tic.  This is used to reset the input string after a set delay.
+        if key == "":
             if self.input_activity > 0:
                 self.input_activity -= 1
                 if self.input_activity == 0:
@@ -213,25 +411,22 @@ class AlarmModel(Singleton):
 
     #-------------------------------------------------------------------
     def update_sensor(self, sensor):
-        if sensor.is_fire_type():
+        if isinstance(sensor,FireSensor):
             self.alarm_state_machine("fire", sensor)
         else:
             self.alarm_state_machine("sensor", sensor)
         event_q.put([dispatcher.send,
                     {"signal": "Sensor Update Model", "sender": dispatcher.Any, "msg": sensor}])
 
-    def check_sensors_locked(self, state=None, sensor_type="intrusion"):
-        """ Verifies if all armed sensors are locked.
-        The verification is done in the current alarm_mode by default.
-        """
+    def check_sensors_locked(self, state=None, sensor_type=AbstractSensor):
+        # Verifies if all armed sensors are locked.
+
+        # The verification is done in the current alarm_mode by default unless specified otherwise
         if state is None:
             state = self.alarm_mode
         for sensor in self.sensor_list:
             if sensor.is_armed(state) and not sensor.is_locked():
-                if sensor_type == "fire":
-                    if sensor.is_fire_type():
-                        return False
-                else:
+                if isinstance(sensor, sensor_type):
                     return False
         return True
 
@@ -412,205 +607,44 @@ class StateFire(AbstractState):
         if event_type == "PIN":        # leaving StateFire if the PIN is typed
             self.set_state(StateIdle())
         elif event_type == "fire":    # leaving StateFire if there is no longer an unlocked fire detector
-            if self.model.check_sensors_locked(sensor_type="fire"):
+            if self.model.check_sensors_locked(sensor_type=FireSensor):
                 self.set_state(StateIdle())
 
 
-class AbstractSensor(Thread):
-    """ This class represents an abstract sensor.
-    """
-    def __init__(self, config):
-        Thread.__init__(self)
-        self.daemon = True
-        self.sensor_mutex = RLock()
-
-        self.model = AlarmModel.getInstance()
-
-        self.name = config["name"]
-        self.icon = config["icon"]
-        self.polling_period = config["polling_period"] / 1000.0    #convert to seconds.
-        armed_states = config["armed_states"]
-        disarming_setting = config["disarming_setting"]
-        self.play_sound = config["play_sound"]
-
-        #Create a list of actual State classes
-        self.armed_states = []
-        self.armed_states_all = False
-        for state_name in armed_states:
-            if state_name == "ANY":
-                self.armed_states_all = True
-            else:
-                self.armed_states.append(getattr(sys.modules[__name__], state_name))
-
-        if disarming_setting == 1:    #default value ("disarming grace delay")
-            self._disarming_grace = self.model.disarming_grace_time
-        else:
-            self._disarming_grace = disarming_setting
-
-        #These variable just need to be initialized...
-        self._current_reading = 1       #current valid sensor reading
-        self._last_reading = 1          #previous valid sensor reading
+#############################################################################################
+# Brain Storm on AlarmModel Events
+#
+# Idea is that the Events could be used by the Dispatcher
+# The model can keep a queue of events for history purposes.  Length TBD
+#
+#############################################################################################
+class AlarmModelEvent():
+    def __init__(self, description):
+        self.event_time = time.time()
+        self.description = description
 
     def __str__(self):
-        return self.__class__.__name__ + "(" + self.name + ", polling_period: " + str(self.polling_period) + ", locked: " + \
-               str(self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace)
+        return time.strftime("%Y-%m-%dT%H:%M:%S", self.event_time) + " " + self.description
 
-    def run(self):
-        logger.info("Started: " + str(self))
-        while (True):
-            self.execute()
-            if self.has_changed():
-                if not self.is_locked():
-                    if self.is_armed():
-                        logger.warning("Unlocked: " + str(self))
-                self.model.update_sensor(self)
-            time.sleep(self.polling_period)
+class SensorEvent(AlarmModelEvent):
+    def __init__(self, sensor):
+        self.sensor = sensor
+        self.alarm_mode = AlarmModel.getInstance().alarm_mode
 
-    def _set_reading(self, reading):
-        with self.sensor_mutex:
-            self._last_reading = self._current_reading
-            self._current_reading = reading
+class IntrusionEvent(SensorEvent):
+    pass
 
-    def get_reading(self):
-        with self.sensor_mutex:
-            return self._current_reading
+class FireEvent(SensorEvent):
+    pass
 
-    def has_changed(self):
-        return not (self._current_reading == self._last_reading)
+class InputEvent(AlarmModelEvent):
+    #"PIN entered"
+    #"Guest PIN entered"
+    #"Function X entered"
+    pass
 
-    # This is the hook that gets polled.  It should hold the code to read the value if required.
-    def execute(self):
-        pass
-
-    def is_locked(self):
-        return self._current_reading
-
-    def is_armed(self, state=None):
-        # if this sensor is always armed (eg. Smoke Detector)
-        if self.armed_states_all:
-            return True
-
-        # state: by default, it looks at the current state of the model.
-        if state == None:
-            state = self.model.alarm_mode
-
-        for astate in self.armed_states:
-            if isinstance(state, astate):
-                return True
-        return False
-
-    def has_sound(self):
-        return self.play_sound
-
-    #TO BE REMOVE ONCE TYPE IS PROPERLY INCORPORATED IN THE SYSTEM
-    def is_fire_type(self):
-        return isinstance(self,FireSensor)
+class FaultEvent(AlarmModelEvent):
+    pass
 
 
-class Sensor(AbstractSensor):
-    """ This class represents a sensor.
-    """
-    def __init__(self, config):
-        AbstractSensor.__init__(self, config)
-
-        self.pin = config["pin"]
-        self.pin_mode = config["pin_mode"]
-        self.normally_closed = config["normally_closed"]
-
-        self._previous_raw_reading = 0  #previous raw reading used for de-bouncing purposes and determine validity
-        self.setup()
-
-    def __str__(self):
-        return AbstractSensor.__str__(self) + ", pin(mode): " + str(self.pin) + "(" + str(self.pin_mode) + \
-               ") , normally closed: " + str(self._is_normally_closed()) + ")"
-
-    def setup(self):
-        try:
-            temp_mode = GPIO.PUD_UP
-            if self.pin_mode == "PULLUP":
-                temp_mode = GPIO.PUD_UP
-            elif self.pin_mode == "FLOATING":
-                temp_mode = GPIO.PUD_UP
-            elif self.pin_mode == "PULLDOWN":
-                temp_mode = GPIO.PUD_DOWN
-            GPIO.setup(int(self.pin), GPIO.IN, pull_up_down=temp_mode)
-        except:
-            logger.warning("Exception while setting a Sensor.", exc_info=True)
-
-        self.execute() #initialize the value to the current reading
-
-    def execute(self):
-        with self.sensor_mutex:
-            try:
-                raw_reading = GPIO.input(int(self.pin))
-
-                if raw_reading == self._previous_raw_reading:
-                    self._set_reading(self.convert_raw(raw_reading))
-                else:
-                    self._set_reading(self.get_reading())   # The reading stays the same.  We have to call _set_reading
-                                                            # in order to ensure has_changed() is functioning properly.
-                self._previous_raw_reading = raw_reading
-            except:
-                logger.warning("Exception while reading a Sensor.", exc_info=True)
-
-    def convert_raw(self, reading):
-        # Convert for pin mode
-        tmp = reading   # assuming "PULLUP"
-        if self.pin_mode == "FLOATING":
-            tmp = 1 - reading
-        elif self.pin_mode == "PULLDOWN":
-            tmp = 1 - reading
-
-        # Convert for normally opened or closed.
-        if self._is_normally_closed():
-            return 1 - tmp
-        else:    #normally_opened
-            return tmp
-
-    def _is_normally_closed(self):
-        return self.normally_closed
-
-    def get_disarming_grace(self):
-        return self._disarming_grace
-
-
-class FireSensor(Sensor):
-    def __init__(self, config):
-        config["armed_states"] = ["ANY"]
-        config["disarming_setting"] = 0
-        Sensor.__init__(self, config)
-
-
-class MotionCamera(AbstractSensor):
-    """ This class represents a Motion Camera (eg. webcam).
-    """
-    def __init__(self, config):
-        AbstractSensor.__init__(self, config)
-
-        dispatcher.connect(self.handle_event, signal=self.name+" Event", sender=dispatcher.Any,
-                           weak=False)
-        self.motion_activity_timer = 0
-        self.MOTION_ACTIVITY_TIMER_SETTING = 4
-
-    def __str__(self):
-        return AbstractSensor.__str__(self) + ", MOTION_ACTIVITY_TIMER_SETTING=" + \
-               str(self.MOTION_ACTIVITY_TIMER_SETTING) + ")"
-
-    # possible event: event_start | event_end | motion_detected
-    def handle_event(self, msg):
-        logger.debug(self.name + " receiving event " + msg)
-        if msg == "motion_detected":
-            with self.sensor_mutex:
-                self.motion_activity_timer = self.MOTION_ACTIVITY_TIMER_SETTING
-
-    def execute(self):
-        #Reading of the Motion sensor is always locked unless motion was recently detected.
-        if self.motion_activity_timer == 0:
-            with self.sensor_mutex:
-                self._set_reading(1)    #The reading returns to false after the set inactivity period.
-
-        #Decreases the timer when motion was recently detected.
-        if self.motion_activity_timer > 0:
-            self._set_reading(0)        # Call to propagate the unlocked reading to _last_reading to ensure the
-                                        # has_changed() return is accurate.
-            self.motion_activity_timer -= 1
+#############################################################################################
