@@ -9,6 +9,68 @@ import time
 from threading import RLock, Thread, Event
 import RPi.GPIO as GPIO
 
+class Testable():
+    def __init__(self):
+        self.BITServer = BuiltInTest.getInstance()
+        self.BITServer.register(self)
+        self.not_undergoing_BIT = self.BITServer.not_undergoing_BIT
+
+        # The execution of the BIT could be done using the dispatcher.  However, there is no real benefit.
+        # dispatcher.connect(self.do_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
+
+    def do_BIT(self):
+        logging.info(self.__class__.__name__ + " BIT")
+
+class BuiltInTest(Thread, Singleton):
+    def __init__(self):
+        Thread.__init__(self)
+        self.testable_list = []
+
+        self.start_BIT_command = Event()
+        self.start_BIT_command.clear()
+        self.not_undergoing_BIT = Event()
+        self.not_undergoing_BIT.set()
+
+        self.model = AlarmModel.getInstance()
+        self.daemon = True
+
+        self.start()
+
+    def register(self, testable_objet):
+        self.testable_list.append(testable_objet)
+
+    def run_BIT(self):
+        self.start_BIT_command.set()
+
+    def run(self):
+        while True:
+            self.start_BIT_command.wait()
+            try:
+                self.model.broadcast_message("- Starting BIT -")
+
+                # Output the config
+                logger.info("--- Alarm config Dump ---")
+                logger.info(yaml.dump(self.model.alarm_config_dictionary))
+                # Output the AlarmModel
+                logger.info("--- AlarmModel ---")
+                logger.info(str(self.model))
+
+                # Save the current state of the system to return to the same state after the BIT.
+                saved_state = self.model.alarm_mode
+
+                # Flags all testable objects that the test is ongoing.  The testable object should wait.
+                self.not_undergoing_BIT.clear()
+                # Run BIT on all testable objects
+                for an_object in self.testable_list:
+                    an_object.do_BIT()
+                self.not_undergoing_BIT.set()
+
+            except:
+                logging.warning("Exception while running BIT.", exc_info=True)
+
+            self.model.broadcast_message("- BIT Completed -")
+            self.start_BIT_command.clear()
+
 class AbstractSensor(Thread, Testable):
     """ This class represents an abstract sensor.
     """
@@ -51,9 +113,9 @@ class AbstractSensor(Thread, Testable):
                str(self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace)
 
     def run(self):
-        self.undergoing_test.wait() #Wait if doing BIT
         logger.info("Started: " + str(self))
         while (True):
+            self.not_undergoing_BIT.wait() #Wait if doing BIT
             self.execute()
             if self.has_changed():
                 if not self.is_locked():
@@ -99,7 +161,7 @@ class AbstractSensor(Thread, Testable):
         return self.play_sound
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
         # Save current state
         saved_output = self._current_reading
 
@@ -331,10 +393,12 @@ class AlarmModel(Singleton):
         # Function key.
         if key == "*":
             if self.function_dict.has_key(self.input_string):
+                func = "function_"+self.function_dict[self.input_string]
+                logger.debug("Function key pressed. Input string: " + self.input_string + ", function: " + func)
+                # Those functions could be part of the State.  The methods can be easily moved in the state.
+                getattr(self, func)()
                 self.input_string = ""
                 self.display_string = ""
-                # Those functions could be part of the State.  The methods can be easily moved in the state.
-                getattr(self, "function_"+self.function_dict[self.input_string])()
         # Input_string reset
         elif key == "#":
             self.input_string = ""
@@ -648,61 +712,6 @@ class StateFire(AbstractState):
         elif event_type == "fire":    # leaving StateFire if there is no longer an unlocked fire detector
             if self.model.check_sensors_locked(sensor_type=FireSensor):
                 self.set_state(StateIdle())
-
-class Testable():
-    def __init__(self):
-        self.BITServer = BuiltInTest.getInstance()
-        self.BITServer.register(self)
-        self.undergoing_test = self.BITServer.undergoing_test
-
-        # The execution of the BIT could be done using the dispatcher.  However, there is no real benefit.
-        # dispatcher.connect(self.do_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
-
-    def do_BIT(self):
-        logging.info(self.__class__.__name__ + " BIT")
-
-class BuiltInTest(Thread, Singleton):
-    def __init__(self):
-        Thread.__init__(self)
-        self.testable_list = []
-
-        self.start_BIT_command = Event()
-        self.start_BIT_command.clear()
-        self.undergoing_test = Event()
-        self.undergoing_test.clear()
-
-        self.model = AlarmModel.getInstance()
-        self.daemon = True
-
-    def register(self, testable_objet):
-        self.testable_list.append(testable_objet)
-
-    def run_BIT(self):
-        self.start_BIT_command.set()
-
-    def run(self):
-        while True:
-            self.start_BIT_command.wait()
-            self.model.broadcast_message("- Starting BIT -")
-
-            # Output the config
-            logger.info("--- Alarm config Dump ---")
-            logger.info(yaml.dump(self.alarm_config_dictionary))
-            # Output the AlarmModel
-            logger.info("--- AlarmModel ---")
-            logger.info(str(self.model))
-
-            # Save the current state of the system to return to the same state after the BIT.
-            saved_state = self.model.alarm_mode
-
-            # Flags all testable objects that the test is ongoing.  The testable object should wait.
-            self.undergoing_test.set()
-            # Run BIT on all testable objects
-            for an_object in self.testable_list:
-                an_object.do_BIT()
-
-            self.model.broadcast_message("- BIT Completed -")
-            self.start_BIT_command.clear()
 
 #############################################################################################
 # Brain Storm on AlarmModel Events

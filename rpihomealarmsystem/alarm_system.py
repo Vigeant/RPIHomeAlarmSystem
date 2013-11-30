@@ -94,6 +94,7 @@ class WeatherScanner(Thread, Testable):
         Testable.__init__(self)
         self.model = AlarmModel.getInstance()
         self.daemon = True
+        alarm_config_dictionary = self.model.alarm_config_dictionary
 
         self.last_weather_check = None
         self.url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
@@ -105,7 +106,7 @@ class WeatherScanner(Thread, Testable):
     def run(self):
         logger.info("WeatherScanner started")
         while True:
-            self.undergoing_test.wait() #Wait if doing BIT
+            self.not_undergoing_BIT.wait() #Wait if doing BIT
             if network_is_alive:
                 try:
                     logger.info("Checking Weather.")
@@ -126,7 +127,7 @@ class WeatherScanner(Thread, Testable):
             time.sleep(300)
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
         assert self.isAlive()
         self.model.broadcast_message("Last check: " + time.strftime("%H:%M", time.localtime(self.last_weather_check)))
         time.sleep(.5)
@@ -151,7 +152,7 @@ class NetworkMonitorScanner(Thread, Testable):
         network_is_alive = True
         logger.info("NetworkMonitor started")
         while True:
-            self.undergoing_test.wait() #Wait if doing BIT
+            self.not_undergoing_BIT.wait() #Wait if doing BIT
 
             is_alive = self.check_connectivity(self.url)
             if not (network_is_alive == is_alive):
@@ -178,7 +179,7 @@ class NetworkMonitorScanner(Thread, Testable):
         return False
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
         logger.info("url: " + self.url)
         self.model.broadcast_message("Inet alive: " + str(network_is_alive))
         assert self.isAlive()
@@ -205,10 +206,8 @@ class AlarmRemote(Thread, Testable):
         self.t.start()
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
         assert self.isAlive()
-        logger.info("Ensuring RemoteService is also alive.")
-        assert self.t.isAlive()
         logger.info("Testing RemoteService exposed_get_model.")
         logger.info(self.t.exposed_get_model())
 
@@ -276,7 +275,9 @@ class AlarmController():
         self.model = AlarmModel.getInstance()
 
         # set the GPIO numbering system (BCM or BOARD)
-        GPIO.setmode(self.model.alarm_config_dictionary["GPIO_numbering_system"])
+        # TODO: convert from string to actual variable.
+        #GPIO.setmode(self.model.alarm_config_dictionary["GPIO_numbering_system"])
+        GPIO.setmode(GPIO.BCM)
 
         #create sensors
         self.sensor_map = self.model.alarm_config_dictionary["sensor_map"]
@@ -332,16 +333,16 @@ class AlarmController():
 class KeypadScanner(Thread, Testable):
     """ This class will scan the keypad in its own thread """
     #--------------------------------------------------------------------------------
-    def __init__(self, alarm_config_dictionary, model):
+    def __init__(self):
         """ Init the keypad scanner """
         Thread.__init__(self)
         Testable.__init__(self)
 
         self.daemon = True
-        self.model = model
+        self.model = AlarmModel.getInstance()
 
         try:
-            driver = alarm_config_dictionary["I2C_driver"]
+            driver = self.model.alarm_config_dictionary["I2C_driver"]
             logger.debug("I2C_driver: " + driver)
         except:
             logger.warning("KeypadScanner cannot be configured properly. ", exc_info=True)
@@ -362,7 +363,7 @@ class KeypadScanner(Thread, Testable):
         logger.info("KeypadScanner started")
         global lcd_init_required
         while True:
-            self.undergoing_test.wait() #Wait if doing BIT
+            self.not_undergoing_BIT.wait() #Wait if doing BIT
             try:
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
@@ -377,7 +378,7 @@ class KeypadScanner(Thread, Testable):
                 time.sleep(10)
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
         assert self.isAlive()
 
 ###################################################################################
@@ -458,7 +459,7 @@ class SoundPlayerView(Testable):
             subprocess.Popen(['aplay', '-q', self.script_path + self.sound_config[string]])
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
         logger.info("Playing all sound files.")
         for a_string in self.sound_config.values():
             self.model.broadcast_message("Play: " + a_string)
@@ -973,7 +974,7 @@ class LCDView(Testable):
         self.set_backlight(True)
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
 
         # Test all arrows
         arrow_chars = self.lcd.get_char("arrow")
@@ -1530,7 +1531,7 @@ class GPIOView(Testable):
         return state in self.states_from
 
     def do_BIT(self):
-        super(self)
+        Testable.do_BIT(self)
         # Save current state
         saved_output = GPIO.input(self.pin)
 
