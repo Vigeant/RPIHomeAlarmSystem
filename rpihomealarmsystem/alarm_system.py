@@ -25,7 +25,6 @@ Features
 "Alarm Mode Update Model"
 "Grace Update Model"
 "Sensor Update Model"
-"BIT"
 "Reboot"
 "Terminate"
 
@@ -86,16 +85,17 @@ class TimeScanner(Thread):
             time.sleep(1)
 
 
-class WeatherScanner(Thread):
+class WeatherScanner(Thread, Testable):
     """ This class scans the weather in its own thread. A "Weather Update" event is generated every 5 minutes. """
 
     def __init__(self):
         """ Init the weather scanner """
         Thread.__init__(self)
+        Testable.__init__(self)
         self.model = AlarmModel.getInstance()
         self.daemon = True
-        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
 
+        self.last_weather_check = None
         self.url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
                    + "/geolookup/conditions/q/" + alarm_config_dictionary["wunderground location"] + ".json"
         #self.forecast_url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"] +/
@@ -105,6 +105,7 @@ class WeatherScanner(Thread):
     def run(self):
         logger.info("WeatherScanner started")
         while True:
+            self.undergoing_test.wait() #Wait if doing BIT
             if network_is_alive:
                 try:
                     logger.info("Checking Weather.")
@@ -117,25 +118,29 @@ class WeatherScanner(Thread):
                     wind_kph = parsed_json_weather['current_observation']['wind_mph'] * 1.61
                     temp = parsed_json_weather['current_observation']['feelslike_c']
                     self.model.update_weather(temp, wind_dir, wind_kph)
+                    self.last_weather_check = time.time()
 
                 except:
                     logger.warning("Exception in WeatherScanner", exc_info=True)
 
             time.sleep(300)
 
-    def handle_BIT(self):
-        logger.info("WeatherScanner BIT")
+    def do_BIT(self):
+        super(self)
         assert self.isAlive()
+        self.model.broadcast_message("Last check: " + time.strftime("%H:%M", time.localtime(self.last_weather_check)))
+        time.sleep(.5)
 
-class NetworkMonitorScanner(Thread):
+class NetworkMonitorScanner(Thread, Testable):
     """ This class verifies the network connectivity periodically. """
     #------------------------------------------------------------------------------
     def __init__(self):
         """ Init the NetworkMonitor scanner """
         Thread.__init__(self)
+        Testable.__init__(self)
+
         self.model = AlarmModel.getInstance()
         self.daemon = True
-        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
 
         self.url = 'http://74.125.228.100'
         self.start()
@@ -146,6 +151,8 @@ class NetworkMonitorScanner(Thread):
         network_is_alive = True
         logger.info("NetworkMonitor started")
         while True:
+            self.undergoing_test.wait() #Wait if doing BIT
+
             is_alive = self.check_connectivity(self.url)
             if not (network_is_alive == is_alive):
                 network_is_alive = is_alive
@@ -170,20 +177,22 @@ class NetworkMonitorScanner(Thread):
             pass
         return False
 
-    def handle_BIT(self):
-        logger.info("NetworkMonitorScanner BIT")
+    def do_BIT(self):
+        super(self)
         logger.info("url: " + self.url)
-        logger.info("network_is_alive: " + str(network_is_alive))
+        self.model.broadcast_message("Inet alive: " + str(network_is_alive))
         assert self.isAlive()
 
 
-class AlarmRemote(Thread):
+class AlarmRemote(Thread, Testable):
     """ This class creates a simple thread that contains the RemoteService. """
 
     def __init__(self):
         Thread.__init__(self)
+        Testable.__init__(self)
         self.daemon = True
-        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
+
+        self.test_flag = Event().clear()
         dispatcher.connect(self.handle_test, signal="AlarmRemote Test", sender=dispatcher.Any, weak=False)
 
         self.start()
@@ -195,23 +204,22 @@ class AlarmRemote(Thread):
         self.t = ThreadedServer(RemoteService, port=18861)
         self.t.start()
 
-    def handle_BIT(self):
-        logger.info("AlarmRemote BIT")
+    def do_BIT(self):
+        super(self)
         assert self.isAlive()
         logger.info("Ensuring RemoteService is also alive.")
         assert self.t.isAlive()
         logger.info("Testing RemoteService exposed_get_model.")
         logger.info(self.t.exposed_get_model())
+
         logger.info("Testing RemoteService exposed_create_event.")
-        self.test_flag = False
         self.t.exposed_create_event("AlarmRemote Test","")
-        time.sleep(1)
-        assert self.test_flag
+        assert self.test_flag.wait(3)   #returns True if no timeout.
         logger.info("Test signal received.")
-        self.test_flag = False
+        self.test_flag.clear()
 
     def handle_test(self):
-        self.test_flag = True
+        self.test_flag.set()
 
 class RemoteService(rpyc.Service):
     """ This class uses rpyc to provide access to and control of the RPIAlarmSystem """
@@ -267,13 +275,11 @@ class AlarmController():
         #create model (MVC pattern)
         self.model = AlarmModel.getInstance()
 
-        GPIO.setmode(GPIO.BCM)  # using pin numbering of the channel number on the Broadcom chip
-                                # (ie. not the pin number on the connector)
+        # set the GPIO numbering system (BCM or BOARD)
+        GPIO.setmode(self.model.alarm_config_dictionary["GPIO_numbering_system"])
 
         #create sensors
         self.sensor_map = self.model.alarm_config_dictionary["sensor_map"]
-        GPIO.setmode(GPIO.BCM)  # using pin numbering of the channel number on the Broadcom chip
-                                # (ie. not the pin number on the connector)
 
         for sensor_type in [Sensor, FireSensor, MotionCamera]:
             for sensor_config in self.sensor_map[sensor_type.__name__]:
@@ -308,7 +314,7 @@ class AlarmController():
         AlarmRemote() #create the Thread that serves as a remote controller
 
         logger.info("AlarmController started")
-         
+
     #--------------------------------------------------------------------------------
     @staticmethod
     def handle_reboot_request():
@@ -323,15 +329,16 @@ class AlarmController():
         self.model.update_fault(msg)
 
 #####################################################################################
-class KeypadScanner(Thread):
+class KeypadScanner(Thread, Testable):
     """ This class will scan the keypad in its own thread """
     #--------------------------------------------------------------------------------
     def __init__(self, alarm_config_dictionary, model):
         """ Init the keypad scanner """
         Thread.__init__(self)
+        Testable.__init__(self)
+
         self.daemon = True
         self.model = model
-        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
 
         try:
             driver = alarm_config_dictionary["I2C_driver"]
@@ -355,6 +362,7 @@ class KeypadScanner(Thread):
         logger.info("KeypadScanner started")
         global lcd_init_required
         while True:
+            self.undergoing_test.wait() #Wait if doing BIT
             try:
                 key = self.keypad.getInstance().get_key()
                 if not key == '':
@@ -368,17 +376,18 @@ class KeypadScanner(Thread):
                 #logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
                 time.sleep(10)
 
-    def handle_BIT(self):
-        logger.info("KeypadScanner BIT")
+    def do_BIT(self):
+        super(self)
         assert self.isAlive()
 
 ###################################################################################
-class SoundPlayerView():
+class SoundPlayerView(Testable):
     """ This class is responsible to play_notes the sounds. And for most bugs"""
 
     #------------------------------------------------------------------------------
     def __init__(self):
-        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
+        Testable.__init__(self)
+
         self.model = AlarmModel.getInstance()
         self.script_path = self.model.script_path
         self.sound_config = self.model.alarm_config_dictionary["sounds"]
@@ -448,11 +457,14 @@ class SoundPlayerView():
         with self.lock:                      # Begin critical section
             subprocess.Popen(['aplay', '-q', self.script_path + self.sound_config[string]])
 
-    def handle_BIT(self):
-        logger.info("SoundPlayerView BIT")
+    def do_BIT(self):
+        super(self)
         logger.info("Playing all sound files.")
         for a_string in self.sound_config.values():
+            self.model.broadcast_message("Play: " + a_string)
             subprocess.Popen(['aplay', '-q', self.script_path + a_string])
+            time.sleep(1)
+            subprocess.call("ps x | grep '[a]play_notes' | awk '{ print $1 }' | xargs kill", shell=True)
 
 ###################################################################################
 buzzQ = Queue()
@@ -578,9 +590,11 @@ class BuzzPlayer(Thread):
         self.continuous_string = self.default_string
         self.play_notes(self.continuous_string)
 
-class LCDView():
+class LCDView(Testable):
     def __init__(self):
+        Testable.__init__(self)
         self.model = AlarmModel.getInstance()
+
         try:
             driver = self.model.alarm_config_dictionary["I2C_driver"]
         except:
@@ -654,7 +668,6 @@ class LCDView():
         dispatcher.connect(self.update_grace_timer, signal="Grace Update Model",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
-        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
 
         signal.signal(signal.SIGUSR1, self.update_ui_file)
         self.ui_file_path = os.path.dirname(os.path.abspath(__file__)) + "/"
@@ -959,8 +972,8 @@ class LCDView():
             self.lcd_backlight_timer = self.lcd_backlight_timer_setting
         self.set_backlight(True)
 
-    def handle_BIT(self):
-        logger.info("LCDView BIT")
+    def do_BIT(self):
+        super(self)
 
         # Test all arrows
         arrow_chars = self.lcd.get_char("arrow")
@@ -973,6 +986,7 @@ class LCDView():
         for [index, data, symbol] in self.lcd_custom_chars:
             custom_chars += self.lcd.get_char(symbol)
         self.update_msg(custom_chars)
+        time.sleep(1)
 
         # Redraw everything on the LCD.
         self.draw_sensors()
@@ -1458,12 +1472,12 @@ class EmailSender(Thread):
         s.quit()
 
 ###################################################################################		
-class GPIOView():
+class GPIOView(Testable):
     #-------------------------------------------------------------------
     def __init__(self, output_config):
-        dispatcher.connect(self.handle_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
-        self.model = AlarmModel.getInstance()
+        Testable.__init__(self)
 
+        self.model = AlarmModel.getInstance()
         [self.pin, self.name, normal_pin_value, self.states_on, self.states_from] = output_config
 
         """  This code has been removed since the comparison between states is done through str()
@@ -1515,8 +1529,12 @@ class GPIOView():
             return True
         return state in self.states_from
 
-    def handle_BIT(self):
-        self.model.broadcast_message("BIT Output: " + self.name)
+    def do_BIT(self):
+        super(self)
+        # Save current state
+        saved_output = GPIO.input(self.pin)
+
+        self.model.broadcast_message("Output " + self.name)
         GPIO.output(self.pin, self.normal_pin_value ^ 1)
         time.sleep(.5)
         GPIO.output(self.pin, self.normal_pin_value)
@@ -1524,6 +1542,9 @@ class GPIOView():
         GPIO.output(self.pin, self.normal_pin_value ^ 1)
         time.sleep(.5)
         GPIO.output(self.pin, self.normal_pin_value)
+
+        # Reset to save value to ensure is is left in the same state
+        GPIO.output(self.pin, saved_output)
 
 # Run the program
 if __name__ == "__main__":

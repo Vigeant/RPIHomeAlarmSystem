@@ -22,6 +22,13 @@ guest_pin: "4321"
 
 # Functions. The digit sequence to call the corresponding function.  The sequence has to be followed by a * to be used.
 # Number of digits has to be the same length as the pin or shorter.
+# Available functions:
+#   partial_arm
+#   delayed_partial_arm
+#   display_statistics
+#   reboot
+#   built_in_test
+
 functions:
     "": partial_arm
     "0": delayed_partial_arm
@@ -29,6 +36,8 @@ functions:
     "1111": reboot
     "2222": built_in_test
 
+# GPIO numbering system (GPIO.BOARD or GPIO.BCM).
+GPIO_numbering_system: "GPIO.BCM"
 
 # sensor_map.  Each set in the map are as follows:
 # Pin number (GPIO BCM pin number)
