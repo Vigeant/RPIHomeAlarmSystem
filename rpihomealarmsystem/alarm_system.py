@@ -391,6 +391,7 @@ class SoundPlayerView(Testable):
 
         self.model = AlarmModel.getInstance()
         self.script_path = self.model.script_path
+        self.alarm_config = self.model.alarm_config_dictionary
         self.sound_config = self.model.alarm_config_dictionary["sounds"]
 
         try:
@@ -418,7 +419,6 @@ class SoundPlayerView(Testable):
         logger.info("SoundPlayerView created")
 
     def play_sensor_change(self, msg):
-        logger.debug("play_sensor_change")
         sensor = msg
         if sensor.has_sound():
             self.play_notes("grace_beeps3")
@@ -426,7 +426,7 @@ class SoundPlayerView(Testable):
     def play_grace_timer(self, msg):
         alarm_mode = self.model.alarm_mode
         if str(alarm_mode) == "StateArming":
-            if msg == self.sound_config["arming grace delay"]:
+            if msg == self.alarm_config["arming grace delay"]:
                 pass
             elif msg > 10:
                 self.play_notes("grace_beeps")
@@ -456,6 +456,7 @@ class SoundPlayerView(Testable):
 
     def play_notes(self, string):
         with self.lock:                      # Begin critical section
+            logger.debug("SoundPlayerView playing: " + string)
             subprocess.Popen(['aplay', '-q', self.script_path + self.sound_config[string]])
 
     def do_BIT(self):
@@ -981,7 +982,7 @@ class LCDView(Testable):
         for dir in ["SOUTH_WEST","WEST","NORTH_WEST","NORTH","NORTH_EAST","EAST","SOUTH_EAST"]:
             self.wind_dir_arrow(dir)
             self.update_msg(arrow_chars)
-            time.sleep(.5)
+            time.sleep(1)
         # Displaying custom chars on the LCD.
         custom_chars=""
         for [index, data, symbol] in self.lcd_custom_chars:
@@ -1514,7 +1515,7 @@ class GPIOView(Testable):
 
     def update_alarm_mode(self):
         if (str(self.model.alarm_mode) in self.states_on) and self.is_active_from_state(
-                self.model.last_trig_state):
+                str(self.model.last_trig_state)):
             if GPIO.input(self.pin) == self.normal_pin_value:
                 logger.info("Output turned on: " + self.name)
                 self.active = True
@@ -1543,6 +1544,7 @@ class GPIOView(Testable):
         GPIO.output(self.pin, self.normal_pin_value ^ 1)
         time.sleep(.5)
         GPIO.output(self.pin, self.normal_pin_value)
+        time.sleep(1)
 
         # Reset to save value to ensure is is left in the same state
         GPIO.output(self.pin, saved_output)
