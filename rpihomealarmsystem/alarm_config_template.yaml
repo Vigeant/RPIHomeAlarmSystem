@@ -28,6 +28,7 @@ guest_pin: "4321"
 #   display_statistics
 #   reboot
 #   built_in_test
+#   detailed_weather
 
 functions:
     "": partial_arm
@@ -35,6 +36,7 @@ functions:
     "1": display_statistics
     "1111": reboot
     "2222": built_in_test
+    "3333": detailed_weather
 
 # GPIO numbering system (GPIO.BOARD or GPIO.BCM).
 GPIO_numbering_system: "GPIO.BCM"

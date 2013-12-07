@@ -165,10 +165,10 @@ class I2CBV4618(Singleton):
         with self.mutex:
             if not charname == "":
                 self.char_dict[charname] = num
-            self.send_cmd([0x01, 64 + num * 8])
-            self.send(data)
-            #self.send_cmd([0x01,128]) #Document is not clear about the requirement for this or not.  Suspecting it is not required. 
-            time.sleep(.3)
+            self.send_cmd([0x01, 64 + num * 8] + data)
+            #self.send(data)
+            #self.send_cmd([0x01,128]) #Document is not clear about the requirement for this or not.  Suspecting it is not required.
+            time.sleep(.4)
 
     def print_char(self, char):
         self.send([char])

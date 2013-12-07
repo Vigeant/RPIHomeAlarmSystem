@@ -64,12 +64,13 @@ from event_serializer import EventSerializer,event_q
 network_is_alive = True
 lcd_init_required = False
 
-class TimeScanner(Thread):
+class TimeScanner(Thread, Testable):
     """ This class scans and publishes the time in its own thread.  A "Time Update" event is generated every second. """
     #------------------------------------------------------------------------------
     def __init__(self):
         """ Init the time scanner """
         Thread.__init__(self)
+        Testable.__init__(self)
         self.daemon = True
         self.model = AlarmModel.getInstance()
         self.start()
@@ -78,12 +79,20 @@ class TimeScanner(Thread):
     def run(self):
         logger.info("TimeScanner started")
         while True:
-            h = time.localtime().tm_hour
-            m = time.localtime().tm_min
-            s = time.localtime().tm_sec
-            self.model.update_time(h,m,s)
+            self.not_undergoing_BIT.wait() #Wait if doing BIT
+            self.execute()
             time.sleep(1)
 
+    def execute(self):
+        h = time.localtime().tm_hour
+        m = time.localtime().tm_min
+        s = time.localtime().tm_sec
+        self.model.update_time(h,m,s)
+
+    def do_BIT(self):
+        Testable.do_BIT(self)
+        assert self.isAlive()
+        time.sleep(1)
 
 class WeatherScanner(Thread, Testable):
     """ This class scans the weather in its own thread. A "Weather Update" event is generated every 5 minutes. """
@@ -118,9 +127,11 @@ class WeatherScanner(Thread, Testable):
                     wind_dir = parsed_json_weather['current_observation']['wind_degrees']
                     wind_kph = parsed_json_weather['current_observation']['wind_mph'] * 1.61
                     temp = parsed_json_weather['current_observation']['feelslike_c']
-                    self.model.update_weather(temp, wind_dir, wind_kph)
+
+                    logger.debug(json.dumps(parsed_json_weather))
                     self.last_weather_check = time.time()
 
+                    self.model.update_weather(temp, wind_dir, wind_kph)
                 except:
                     logger.warning("Exception in WeatherScanner", exc_info=True)
 
@@ -130,7 +141,7 @@ class WeatherScanner(Thread, Testable):
         Testable.do_BIT(self)
         assert self.isAlive()
         self.model.broadcast_message("Last check: " + time.strftime("%H:%M", time.localtime(self.last_weather_check)))
-        time.sleep(.5)
+        time.sleep(1)
 
 class NetworkMonitorScanner(Thread, Testable):
     """ This class verifies the network connectivity periodically. """
@@ -152,7 +163,7 @@ class NetworkMonitorScanner(Thread, Testable):
         network_is_alive = True
         logger.info("NetworkMonitor started")
         while True:
-            self.not_undergoing_BIT.wait() #Wait if doing BIT
+            self.not_undergoing_BIT.wait()  # Wait if doing BIT
 
             is_alive = self.check_connectivity(self.url)
             if not (network_is_alive == is_alive):
@@ -161,7 +172,7 @@ class NetworkMonitorScanner(Thread, Testable):
                     msg = "internet_on"
                 else:
                     msg = "internet_off"
-                self.model.update_fault(self, msg)
+                self.model.update_fault(msg)
 
             if network_is_alive:
                 time.sleep(60)
@@ -183,7 +194,16 @@ class NetworkMonitorScanner(Thread, Testable):
         logger.info("url: " + self.url)
         self.model.broadcast_message("Inet alive: " + str(network_is_alive))
         assert self.isAlive()
-
+        time.sleep(1)
+        self.model.broadcast_message("Sim Inet Fault")
+        self.model.update_fault("internet_off")
+        self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
+        time.sleep(2)
+        self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
+        time.sleep(2)
+        if network_is_alive:
+            self.model.update_fault("internet_on")
+        self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
 
 class AlarmRemote(Thread, Testable):
     """ This class creates a simple thread that contains the RemoteService. """
@@ -193,7 +213,8 @@ class AlarmRemote(Thread, Testable):
         Testable.__init__(self)
         self.daemon = True
 
-        self.test_flag = Event().clear()
+        self.test_flag = Event()
+        self.test_flag.clear()
         dispatcher.connect(self.handle_test, signal="AlarmRemote Test", sender=dispatcher.Any, weak=False)
 
         self.start()
@@ -209,10 +230,10 @@ class AlarmRemote(Thread, Testable):
         Testable.do_BIT(self)
         assert self.isAlive()
         logger.info("Testing RemoteService exposed_get_model.")
-        logger.info(self.t.exposed_get_model())
+        logger.info(RemoteService.exposed_get_model())
 
         logger.info("Testing RemoteService exposed_create_event.")
-        self.t.exposed_create_event("AlarmRemote Test","")
+        RemoteService.exposed_create_event("AlarmRemote Test","")
         assert self.test_flag.wait(3)   #returns True if no timeout.
         logger.info("Test signal received.")
         self.test_flag.clear()
@@ -239,7 +260,8 @@ class RemoteService(rpyc.Service):
         logger.info("Received remote create_event(): " + signal_name + ", msg=" + str(msg))
         event_q.put([dispatcher.send, {"signal": signal_name, "sender": dispatcher.Any, "msg": msg}])
 
-    def exposed_set_alarm_state(self, state_name):  # this is an exposed method
+    @staticmethod
+    def exposed_set_alarm_state(state_name):  # this is an exposed method
         """ This method allows the alarm_remote to change the state of the AlarmModel. Again, this is rather unsafe;
         it should be modified to restrict what can actually be done.  For example, de-arming the AlarmModel should
         require the PIN.
@@ -251,7 +273,8 @@ class RemoteService(rpyc.Service):
         except:
             logger.warning("State is invalid: " + state_name)
 
-    def exposed_get_model(self): # this is an exposed method
+    @staticmethod
+    def exposed_get_model(): # this is an exposed method
         """ This method simply returns an AlarmModel string containing its current state.
         """
         logger.debug("Received remote get_model().")
@@ -881,7 +904,8 @@ class LCDView(Testable):
     #-------------------------------------------------------------------
     def update_msg(self, msg):
         a_string = "                 "
-        a_string = msg + a_string[len(msg):len(a_string)]
+        msg = msg[0:min(len(msg),17)]   # reduce the message if it is too long
+        a_string = msg + a_string[len(msg):len(a_string)]   # pad with spaces if required
         self.send_to_lcd(self.msg_cursor_start, a_string)
 
         self.message_fade_timer = self.msg_fade_timer_setting
@@ -907,27 +931,32 @@ class LCDView(Testable):
         alarm_mode = self.model.alarm_mode
         if str(alarm_mode) == "StateArmed":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
-            status_str = '  AWAY'
+            status_str = "AWAY"
         elif str(alarm_mode) == "StatePartiallyArmed":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
-            status_str = '  STAY'
+            status_str = "STAY"
         elif str(alarm_mode) == "StateDisarming":
             self.backlight_timer_active(timer_active=False)
-            status_str = 'DISARM'
+            status_str = "DISARM"
         elif str(alarm_mode) == "StateArming":
             self.backlight_timer_active(timer_active=False)
-            status_str = 'ARMING'
+            status_str = "ARMING"
         elif str(alarm_mode) == "StateIdle":
             self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
-            status_str = '  IDLE'
+            status_str = "IDLE"
         elif str(alarm_mode) == "StateAlert":
             self.backlight_timer_active(timer_active=False)
-            status_str = ' ALERT'
+            status_str = "ALERT"
         elif str(alarm_mode) == "StateFire":
             self.backlight_timer_active(timer_active=False)
-            status_str = '  FIRE'
+            status_str = "FIRE"
+        elif str(alarm_mode) == "StateBIT":
+            self.backlight_timer_active(timer_active=False)
+            status_str = "BIT"
         else:
             status_str = "ERROR"
+
+        status_str = status_str.rjust(6)
         logger.debug("LCDView changing state to: " + status_str)
         self.send_to_lcd(self.alarm_mode_cursor_start, status_str)
         self.update_pin(self.model.input_string)
@@ -978,17 +1007,19 @@ class LCDView(Testable):
         Testable.do_BIT(self)
 
         # Test all arrows
+        self.update_msg("Testing arrows")
+        time.sleep(1)
         arrow_chars = self.lcd.get_char("arrow")
-        for dir in ["SOUTH_WEST","WEST","NORTH_WEST","NORTH","NORTH_EAST","EAST","SOUTH_EAST"]:
+        for dir in ["SOUTH","SOUTH_WEST","WEST","NORTH_WEST","NORTH","NORTH_EAST","EAST","SOUTH_EAST"]:
+            self.update_msg(dir)
             self.wind_dir_arrow(dir)
-            self.update_msg(arrow_chars)
-            time.sleep(1)
+            time.sleep(2)
         # Displaying custom chars on the LCD.
         custom_chars=""
         for [index, data, symbol] in self.lcd_custom_chars:
             custom_chars += self.lcd.get_char(symbol)
         self.update_msg(custom_chars)
-        time.sleep(1)
+        time.sleep(5)
 
         # Redraw everything on the LCD.
         self.draw_sensors()
@@ -1168,9 +1199,10 @@ class StdView():
 
 calendar_q = Queue()
 ###################################################################################
-class SMSView():
+class SMSView(Testable):
     #-------------------------------------------------------------------
     def __init__(self):
+        Testable.__init__(self)
         self.model = AlarmModel.getInstance()
         alarm_config_dictionary = self.model.alarm_config_dictionary
 
@@ -1219,8 +1251,13 @@ class SMSView():
         if self.seq > 1000:
             self.seq = 0
         self.seq += 1
+
+        if not self.not_undergoing_BIT.is_set():
+            title = "BIT " + title
+
         logger.info("SMSView creating event " + str(self.seq) + " Title: " + title)
         event = gdata.calendar.CalendarEventEntry()
+
         event.title = atom.Title(text=title)
         event.content = atom.Content(text=message)
         event.where.append(gdata.calendar.Where(value_string="Home"))
@@ -1240,6 +1277,14 @@ class SMSView():
     def update_event_end_time(self, seq):
         logger.info("SMSView update requested on event: " + str(seq))
         calendar_q.put([seq, None])
+
+    def do_BIT(self):
+        Testable.do_BIT(self)
+        self.model.broadcast_message("Creating Event")
+        seq = self.insert_event("RPI Test", "Running BIT.  Creating test event.") #sends sms
+        time.sleep(2)
+        self.update_event_end_time(seq)
+        time.sleep(2)
 
 
 class SMSSender(Thread):
@@ -1388,8 +1433,9 @@ class SMSSender(Thread):
 
 email_q = Queue()
 ###################################################################################
-class EmailView():
+class EmailView(Testable):
     def __init__(self):
+        Testable.__init__(self)
         self.model = AlarmModel.getInstance()
 
         if EmailSender().isAlive():
@@ -1422,9 +1468,15 @@ class EmailView():
                 self.create_email("RPI_Power_Recovered", "APCUPS off battery.") #sends sms
 
     def create_email(self, subject, message):
+        if not self.not_undergoing_BIT.is_set():
+            subject = "BIT " + subject
         # Construct email
         email_q.put([subject, message])
 
+    def do_BIT(self):
+        Testable.do_BIT(self)
+        self.model.broadcast_message("Sending Email.")
+        self.create_email("RPI Test", "Running BIT.  Creating test email.")
 
 class EmailSender(Thread):
     #------------------------------------------------------------------------------
@@ -1536,13 +1588,13 @@ class GPIOView(Testable):
         # Save current state
         saved_output = GPIO.input(self.pin)
 
-        self.model.broadcast_message("Output " + self.name)
+        self.model.broadcast_message("O:" + self.name)
         GPIO.output(self.pin, self.normal_pin_value ^ 1)
-        time.sleep(.5)
+        time.sleep(.2)
         GPIO.output(self.pin, self.normal_pin_value)
         time.sleep(1)
         GPIO.output(self.pin, self.normal_pin_value ^ 1)
-        time.sleep(.5)
+        time.sleep(.2)
         GPIO.output(self.pin, self.normal_pin_value)
         time.sleep(1)
 

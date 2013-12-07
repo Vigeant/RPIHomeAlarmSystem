@@ -19,7 +19,8 @@ class Testable():
         # dispatcher.connect(self.do_BIT, signal="BIT", sender=dispatcher.Any, weak=False)
 
     def do_BIT(self):
-        logging.info(self.__class__.__name__ + " BIT")
+        logging.info("C:" + self.__class__.__name__)
+        time.sleep(1)
 
 class BuiltInTest(Thread, Singleton):
     def __init__(self):
@@ -45,31 +46,151 @@ class BuiltInTest(Thread, Singleton):
     def run(self):
         while True:
             self.start_BIT_command.wait()
+
+            self.model.broadcast_message("Starting BIT")
+
+            # Output the config
+            self.model.broadcast_message("Dumping config")
+            logger.info(yaml.dump(self.model.alarm_config_dictionary))
+            time.sleep(1)
+
+            # Output the AlarmModel
+            self.model.broadcast_message("Dumping model")
+            logger.info(str(self.model))
+            time.sleep(1)
+
+            self.model.broadcast_message("Components Tests")
+            time.sleep(1)
+
+            # Flags all testable objects that the test is ongoing.  The testable object should wait.
+            self.not_undergoing_BIT.clear()
+
             try:
-                self.model.broadcast_message("- Starting BIT -")
-
-                # Output the config
-                logger.info("--- Alarm config Dump ---")
-                logger.info(yaml.dump(self.model.alarm_config_dictionary))
-                # Output the AlarmModel
-                logger.info("--- AlarmModel ---")
-                logger.info(str(self.model))
-
-                # Save the current state of the system to return to the same state after the BIT.
-                saved_state = self.model.alarm_mode
-
-                # Flags all testable objects that the test is ongoing.  The testable object should wait.
-                self.not_undergoing_BIT.clear()
+                # This is the modular testing.  The AlarmModel is in StateBIT which prevents state changes.
+                self.model.alarm_mode.set_state(StateBIT())
                 # Run BIT on all testable objects
                 for an_object in self.testable_list:
                     an_object.do_BIT()
-                self.not_undergoing_BIT.set()
 
+                # This is the system level testing.  The AlarmModel the system changes states as per normal operation.
+                self.model.broadcast_message("System Tests")
+                self.model.alarm_mode.set_state(StateIdle())
+                time.sleep(1)
+
+                ########## Test Case ##########
+                # Trigger Fire sensor.
+                self.model.broadcast_message("TC: Fire")
+                sensor = self.force_sensor(FireSensor)
+                if not sensor == None:
+                    time.sleep(.2)
+                    assert isinstance(self.model.alarm_mode, StateFire)
+                    sensor.cancel_forced_reading()
+                    time.sleep(.2)
+                    assert isinstance(self.model.alarm_mode, StateIdle)
+                time.sleep(5)
+
+                ########## Test Case ##########
+                # Trigger intrusion (with grace) while in StatePartiallyArmed
+                self.model.broadcast_message("TC: Intrusion 1")
+                time.sleep(2)
+                self.model.function_partial_arm()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StatePartiallyArmed)
+                sensor = self.force_sensor(Sensor, True)
+                if not sensor == None:
+                    time.sleep(.2)
+                    assert isinstance(self.model.alarm_mode, StateDisarming)
+                    self.model.grace_timer = 0      # forcing the grace to 0
+                    self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
+                    time.sleep(1)
+                    assert isinstance(self.model.alarm_mode, StateAlert)
+                    sensor.cancel_forced_reading()
+                # Simulate entering PIN to disarm.
+                self.model.function_PIN()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateIdle)
+                time.sleep(5)
+
+                ########## Test Case ##########
+                # Trigger intrusion (without grace) while in StatePartiallyArmed
+                self.model.broadcast_message("TC: Intrusion 2")
+                time.sleep(2)
+                self.model.function_partial_arm()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StatePartiallyArmed)
+                sensor = self.force_sensor(Sensor, False)
+                if not sensor == None:
+                    time.sleep(.2)
+                    assert isinstance(self.model.alarm_mode, StateAlert)
+                    sensor.cancel_forced_reading()
+                # Simulate entering PIN to disarm.
+                self.model.function_PIN()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateIdle)
+                time.sleep(5)
+
+                ########## Test Case ##########
+                # Trigger intrusion (with grace) while in StateArmed
+                self.model.broadcast_message("TC: Intrusion 3")
+                time.sleep(2)
+                self.model.function_PIN()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateArming)
+                self.model.grace_timer = 0      # forcing the grace to 0
+                self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateArmed)
+                sensor = self.force_sensor(Sensor, True)
+                if not sensor == None:
+                    time.sleep(1)
+                    assert isinstance(self.model.alarm_mode, StateDisarming)
+                    self.model.grace_timer = 0      # forcing the grace to 0
+                    self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
+                    time.sleep(1)
+                    assert isinstance(self.model.alarm_mode, StateAlert)
+                    sensor.cancel_forced_reading()
+                # Simulate entering PIN to disarm.
+                self.model.function_PIN()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateIdle)
+                time.sleep(5)
+
+                ########## Test Case ##########
+                # Trigger intrusion (with grace) while in StateArmed
+                self.model.broadcast_message("TC: Intrusion 4")
+                time.sleep(2)
+                self.model.function_PIN()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateArming)
+                self.model.grace_timer = 0      # forcing the grace to 0
+                self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateArmed)
+                sensor = self.force_sensor(Sensor, False)
+                if not sensor == None:
+                    time.sleep(1)
+                    assert isinstance(self.model.alarm_mode, StateAlert)
+                    sensor.cancel_forced_reading()
+                # Simulate entering PIN to disarm.
+                self.model.function_PIN()
+                time.sleep(1)
+                assert isinstance(self.model.alarm_mode, StateIdle)
+                time.sleep(1)
+                self.model.broadcast_message("BIT Success")
             except:
+                self.model.broadcast_message("BIT Failed")
                 logging.warning("Exception while running BIT.", exc_info=True)
 
-            self.model.broadcast_message("- BIT Completed -")
+            self.not_undergoing_BIT.set()   # This restarts all the threads.
             self.start_BIT_command.clear()
+
+    def force_sensor(self, sensor_type, has_grace=False):
+        for sensor in self.model.sensor_list:
+            if type(sensor) == sensor_type and sensor.is_armed() and has_grace == (sensor.get_disarming_grace() > 0):
+                sensor.force_reading(0)    # unlock the sensor.
+                return sensor
+        return None
+
 
 class AbstractSensor(Thread, Testable):
     """ This class represents an abstract sensor.
@@ -143,36 +264,49 @@ class AbstractSensor(Thread, Testable):
     def is_locked(self):
         return self._current_reading
 
-    def is_armed(self, state=None):
+    def is_armed(self, state_type=None):
+        # by default, we return the value based on the current model state.
+        if state_type == None:
+            state_type = self.model.alarm_mode.__class__
+
+        # the sensors are never armed when in the StateBIT.  (However, this is redundant since StateBIT does not do
+        # anything. It has been coded for completeness in case the code evolves later...)
+        if state_type == StateBIT:
+             return False
+
         # if this sensor is always armed (eg. Smoke Detector)
         if self.armed_states_all:
             return True
 
-        # state: by default, it looks at the current state of the model.
-        if state == None:
-            state = self.model.alarm_mode
-
         for astate in self.armed_states:
-            if isinstance(state, astate):
+            if state_type == astate:
                 return True
         return False
 
     def has_sound(self):
         return self.play_sound
 
+    def get_disarming_grace(self):
+        return self._disarming_grace
+
+    def force_reading(self, value):
+        self.saved_reading = self._current_reading
+        self._current_reading = value
+        self.model.update_sensor(self)   # update the model.
+
+    def cancel_forced_reading(self):
+        self._current_reading = self.saved_reading
+        self.model.update_sensor(self)   # update the model.
+
     def do_BIT(self):
         Testable.do_BIT(self)
-        # Save current state
-        saved_output = self._current_reading
 
-        self._current_reading = 0   #unlock
         self.model.broadcast_message(self.name)
-        self.model.update_sensor(self)
+        self.force_reading(0)   #unlock
         time.sleep(1)
 
         # Reset to save value to ensure is is left in the same state
-        self._current_reading = saved_output
-        self.model.update_sensor(self)
+        self.cancel_forced_reading()
 
 class Sensor(AbstractSensor):
     """ This class represents a sensor.
@@ -237,8 +371,8 @@ class Sensor(AbstractSensor):
     def _is_normally_closed(self):
         return self.normally_closed
 
-    def get_disarming_grace(self):
-        return self._disarming_grace
+class IntrusionSensor(Sensor):
+    pass
 
 class FireSensor(Sensor):
     def __init__(self, config):
@@ -291,8 +425,10 @@ class AlarmModel(Singleton):
     def __init__(self):
         global logger
         logger = logging.getLogger('model')
+
         self.alarm_config_dictionary = self.get_config()
 
+        logger.debug("Loading AlarmModel grace timers")
         self.arming_grace_time =  self.alarm_config_dictionary[
             "arming grace delay"]  # this is the grace period for the system to arm
         self.disarming_grace_time =  self.alarm_config_dictionary[
@@ -310,6 +446,8 @@ class AlarmModel(Singleton):
         self.hours = 0
         self.minutes = 0
         self.seconds = 0
+
+        logger.debug("Loading AlarmModel PINs")
         self.pin = str(self.alarm_config_dictionary["pin"])
         self.guest_pin = str(self.alarm_config_dictionary["guest_pin"])
 
@@ -327,8 +465,10 @@ class AlarmModel(Singleton):
 
         self.sensor_list = []
 
+        logger.debug("Loading functions strings.")
         self.function_dict = self.alarm_config_dictionary["functions"]
 
+        logger.debug("Initializing AlarmModel state.")
         AbstractState.model = self
         AbstractState().set_state(StateIdle())
 
@@ -349,6 +489,7 @@ class AlarmModel(Singleton):
             return alarm_config_dictionary
         except:
             logger.warning("Error while reading YAML config file.", exc_info=True)
+        return None
 
     def __str__(self):
         model_string = "AlarmModel:\n"
@@ -364,6 +505,17 @@ class AlarmModel(Singleton):
         model_string += "Last broadcasted message: " + self.last_message + "\n"
         model_string += "Power Fault: " + str(self.fault_power) + "\n"
         model_string += "Network Fault: " + str(self.fault_network) + "\n"
+        model_string += "Sensors armed in StatePartiallyArmed:"
+        for sensor in self.sensor_list:
+            if sensor.is_armed(StatePartiallyArmed):
+                model_string += " " + sensor.name
+        model_string += "\n"
+        model_string += "Sensors armed in StateArmed: "
+        for sensor in self.sensor_list:
+            if sensor.is_armed(StateArmed):
+                model_string += " " + sensor.name
+        model_string += "\n"
+        model_string += "Sensors state: \n"
         model_string += self.print_sensors_state()
 
         return model_string
@@ -420,7 +572,7 @@ class AlarmModel(Singleton):
             self.broadcast_message("PIN entered.")
             self.input_string = ""
             self.display_string = ""
-            self.function_arm()
+            self.function_PIN()
 
     def alarm_state_machine(self, event_type, sensor=None):
         self.alarm_mode.handle_event(event_type, sensor)
@@ -501,7 +653,6 @@ class AlarmModel(Singleton):
 
     def check_sensors_locked(self, state=None, sensor_type=AbstractSensor):
         # Verifies if all armed sensors are locked.
-
         # The verification is done in the current alarm_mode by default unless specified otherwise
         if state is None:
             state = self.alarm_mode
@@ -524,7 +675,7 @@ class AlarmModel(Singleton):
         event_q.put(
             [dispatcher.send, {"signal": "Alarm Message", "sender": dispatcher.Any, "msg": msg}])
 
-    def function_arm(self):
+    def function_PIN(self):
         self.alarm_state_machine("PIN")
 
     def function_reboot(self):
@@ -543,17 +694,20 @@ class AlarmModel(Singleton):
         pass
 
     def function_built_in_test(self):
-        BuiltInTest.getInstance().run_BIT()
+        if isinstance(self.alarm_mode, StateIdle):
+            BuiltInTest.getInstance().run_BIT()
+
+    def function_detailed_weather(self):
+        pass
 
 class AbstractState():
     """ This class is the default behaviour of a state.  As per the name, it is meant to be abstract and
     specialized.  Every state can transition to StateFire.  This behaviour is implemented by the AbstractState.
     """
+    model = None
 
     def __init__(self):
         pass
-
-    model = None
 
     def __str__(self):
         return self.__class__.__name__
@@ -578,6 +732,13 @@ class AbstractState():
         event_q.put(
             [dispatcher.send, {"signal": "Alarm Mode Update Model", "sender": dispatcher.Any}])
 
+class StateBIT(AbstractState):
+    """ This class is the state when the system is doing the component BITs.
+    """
+
+    def handle_event(self, event_type, sensor):
+        # This state does absolutely nothing.
+        pass
 
 class StateIdle(AbstractState):
     """ This class is the state when the system is Idle.  This state can transition to StatePartiallyArmed
@@ -592,7 +753,7 @@ class StateIdle(AbstractState):
             self.set_state(StateArming())
         elif event_type == "*":
             # Sensors should be checked before changing to the PARMED state (we should not arm if a door is open)
-            if self.model.check_sensors_locked(StatePartiallyArmed()):
+            if self.model.check_sensors_locked(StatePartiallyArmed):
                 self.set_state(StatePartiallyArmed())
             else:
                 self.model.broadcast_message("Not locked!")
@@ -638,7 +799,7 @@ class StateArming(AbstractState):
         elif event_type == "tic":
             self.model.set_grace_timer(self.model.grace_timer - 1)
             if self.model.grace_timer <= 0:
-                if self.model.check_sensors_locked(StateArmed()):
+                if self.model.check_sensors_locked(StateArmed):
                     self.set_state(StateArmed())
                 else:
                     self.model.broadcast_message("Armed failed!")
