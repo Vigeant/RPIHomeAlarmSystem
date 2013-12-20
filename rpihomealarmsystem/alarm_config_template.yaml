@@ -1,9 +1,17 @@
 # YAML
-# I2C_driver. Currently supported: I2CLCD or I2CBV4618
-I2C_driver: I2CLCD
 
-# lcd_backlight_timer. Delay in sec before the backlight is turned off.  0 to disable (always on).
-lcd_backlight_timer: 30
+# Define the console(s) used to control the system.  There can be more than one; obviously each console would need
+# to be on a different I2C address.  Multiple consoles have not be tested.
+consoles: [
+    {
+    type: LCDConsole,
+    I2C_driver: I2CLCD          # I2C_driver. Currently supported: I2CLCD or I2CBV4618
+    I2C_address: 0x63           # NOT SUPPORTED YET.
+    keypad: 1                   # 1:True, 0:False
+    keypad_polling_period: 100  # Period at which the keypad is polled. (in mSec)
+    lcd_backlight_timer: 25     # lcd_backlight_timer. Delay in sec before the backlight is turned off.  0 to disable (always on).
+    }
+]
 
 # arming grace delay. Delay in seconds.
 arming grace delay: 60
@@ -13,7 +21,7 @@ disarming grace delay: 30
 # (!Not implemented yet!)
 # delay (in minute) during which the fire detectors will be ignored by the system. "Hush" feature.
 # This feature is enabled by entering the PIN when in StateFire or by using the function.
-fire_quiet_delay: 10
+fire_hush_delay: 10
 
 # pin. Code sequence to arm/de-arm the system. Number of digits is flexible.
 pin: "1234"
@@ -33,7 +41,7 @@ guest_pin: "4321"
 functions:
     "": partial_arm
     "0": delayed_partial_arm
-    "1": display_statistics
+    "9": fire_hush
     "1111": reboot
     "2222": built_in_test
     "3333": detailed_weather

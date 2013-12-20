@@ -15,7 +15,7 @@ adr = 0x31
 # ------------------------------------------------------------------------------
 def Send(data): 
     for a in range(0,len(data)):
-	   bus.write_byte(adr,ord(data[a]))
+        bus.write_byte(adr,ord(data[a]))
 
 # ------------------------------------------------------------------------------
 # all commands are preceeded by escape

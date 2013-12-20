@@ -8,20 +8,21 @@ import smbus
 import time
 from singletonmixin import Singleton
 from threading import RLock
+import logging
 
-
-class I2CBV4618(Singleton):
-    def __init__(self, adr=0x31):
-
+class I2CBV4618():
+    def __init__(self, address=0x31):
+        global logger
+        logger = logging.getLogger('I2CBV4618')
         self.char_dict = {}
-        self.delay = 0.03
+        self.delay = 0.05
 
         self.mutex = RLock()
         self.bus = smbus.SMBus(1)
-        self.adr = adr
+        self.adr = address
         self.rows = 4
         self.columns = 20
-        self.init()
+        ##self.init()
 
     def init(self):
         self.char_dict = {}
@@ -30,7 +31,7 @@ class I2CBV4618(Singleton):
             self.define_LCD_size(self.rows, self.columns)
             self.show_cursor(False)    #remove blinking cursor        
             self.clr_scrn()
-            self.set_debounce(60)
+            self.set_debounce(70)
             self.set_scrolling_enabled(False)
 
     # ------------------------------------------------------------------------------
@@ -49,7 +50,6 @@ class I2CBV4618(Singleton):
         with self.mutex:
             for a in range(0, len(data)):
                 self.bus.write_byte(self.adr, data[a])
-                #time.sleep(self.delay)
 
     def print_str(self, string, row=0, column=0):
         with self.mutex:
@@ -111,14 +111,14 @@ class I2CBV4618(Singleton):
 
     def keypad_buffer(self):
         with self.mutex:
-            self.send_cmd([0x10], delay=True)
+            self.send_cmd([0x10])
             tmp = (self.bus.read_byte(self.adr) ^ 128)
             #time.sleep(self.delay)
         return tmp
 
     def get_key_raw(self):
         with self.mutex:
-            self.send_cmd([0x11], delay=True)
+            self.send_cmd([0x11])
             tmp = self.bus.read_byte(self.adr) ^ 128
             #time.sleep(self.delay)
         return tmp
@@ -128,7 +128,7 @@ class I2CBV4618(Singleton):
 
     def get_key(self):
         tmp = self.get_key_raw()
-        if tmp == 0:
+        if not self.key_dict.has_key(tmp):
             return ''
         return self.key_dict[tmp]
 
@@ -165,10 +165,33 @@ class I2CBV4618(Singleton):
         with self.mutex:
             if not charname == "":
                 self.char_dict[charname] = num
-            self.send_cmd([0x01, 64 + num * 8] + data)
-            #self.send(data)
-            #self.send_cmd([0x01,128]) #Document is not clear about the requirement for this or not.  Suspecting it is not required.
-            time.sleep(.4)
+
+            # Apply a mask to all the data to that only the 5 LSB remain set.
+            #for i in range(8):
+            #    data[i] = data[i] & 31
+
+            char_addr = 64 + num * 8
+
+            # For some reason this is required to properly erase/change the lcd memory content.
+            #self.send_cmd([0x01])
+            #self.send([char_addr]+[0,0,0,0,0,0,0,0])
+            #self.send_cmd([0x01])
+            #self.send([128]) #Document is not clear about the requirement for this or not.  Suspecting it is not required.
+
+            self.send_cmd([0x01, char_addr] + [128,128,128,128,128,128,128,128])
+            time.sleep(.1)
+            self.send_cmd([0x01, char_addr] + data)
+
+            #self.send_cmd([0x01])
+            #self.send([char_addr]+data)
+
+            #self.send_cmd([0x01])
+            #self.send([128]) #Document is not clear about the requirement for this or not.  Suspecting it is not required.
+
+            logger.debug(charname+": " + str(data))
+            logger.debug("\taddress: " + str(char_addr))
+            logger.debug("\tchar_dict: " + str(self.char_dict))
+            time.sleep(.1)
 
     def print_char(self, char):
         self.send([char])
@@ -177,14 +200,16 @@ class I2CBV4618(Singleton):
     def get_char(self, charname):
         with self.mutex:
             try:
-                return chr(self.char_dict[charname])
+                tmp = self.char_dict[charname]
+                logger.debug(charname+" char #: " + str(tmp))
+                return chr(tmp)
             except:
                 return '?'
 
     def reset_LCD(self):
         with self.mutex:
             self.send_cmd([0x43])
-            time.sleep(2)
+            time.sleep(.5)
 
 # Run the program
 if __name__ == "__main__":

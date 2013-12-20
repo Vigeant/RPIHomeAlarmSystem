@@ -20,6 +20,7 @@ Features
 "Weather Update Model"
 "Fault Update"
 "Fault Update Model"
+"Button Pressed"
 "Input String Update Model"
 "Alarm Message"
 "Alarm Mode Update Model"
@@ -35,6 +36,7 @@ import json
 import yaml
 import sys
 import string
+from collections import OrderedDict
 import random
 import os
 import logging
@@ -106,10 +108,10 @@ class WeatherScanner(Thread, Testable):
         alarm_config_dictionary = self.model.alarm_config_dictionary
 
         self.last_weather_check = None
-        self.url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
+        self.weather_url_string = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
                    + "/geolookup/conditions/q/" + alarm_config_dictionary["wunderground location"] + ".json"
-        #self.forecast_url = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"] +/
-        # '/geolookup/forecast/q/'+alarm_config_dictionary["wunderground location"]+'.json'
+        self.forecast_url_string = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
+                   + '/geolookup/forecast/q/' + alarm_config_dictionary["wunderground location"]+'.json'
         self.start()
 
     def run(self):
@@ -119,28 +121,36 @@ class WeatherScanner(Thread, Testable):
             if network_is_alive:
                 try:
                     logger.info("Checking Weather.")
-                    weather_url = urllib2.urlopen(self.url)
+                    # Weather Condition
+                    weather_url = urllib2.urlopen(self.weather_url_string)
                     json_weather_string = weather_url.read()
-
                     parsed_json_weather = json.loads(json_weather_string)
 
                     wind_dir = parsed_json_weather['current_observation']['wind_degrees']
                     wind_kph = parsed_json_weather['current_observation']['wind_mph'] * 1.61
                     temp = parsed_json_weather['current_observation']['feelslike_c']
 
+                    # Weather Forecast
+                    forecast_url = urllib2.urlopen(self.forecast_url_string)
+                    json_forecast_string = forecast_url.read()
+                    parsed_json_forecast = json.loads(json_forecast_string)
+
                     logger.debug(json.dumps(parsed_json_weather))
-                    self.last_weather_check = time.time()
+
+                    self.model.last_weather_check = time.time()
+                    self.model.parsed_json_weather = parsed_json_weather
+                    self.model.parsed_json_forecast = parsed_json_forecast
 
                     self.model.update_weather(temp, wind_dir, wind_kph)
                 except:
                     logger.warning("Exception in WeatherScanner", exc_info=True)
 
-            time.sleep(300)
+            time.sleep(600)
 
     def do_BIT(self):
         Testable.do_BIT(self)
         assert self.isAlive()
-        self.model.broadcast_message("Last check: " + time.strftime("%H:%M", time.localtime(self.last_weather_check)))
+        self.model.broadcast_message("Last check: " + time.strftime("%H:%M", time.localtime(self.model.last_weather_check)))
         time.sleep(1)
 
 class NetworkMonitorScanner(Thread, Testable):
@@ -195,7 +205,7 @@ class NetworkMonitorScanner(Thread, Testable):
         self.model.broadcast_message("Inet alive: " + str(network_is_alive))
         assert self.isAlive()
         time.sleep(1)
-        self.model.broadcast_message("Sim Inet Fault")
+        self.model.broadcast_message("Inet Fault")
         self.model.update_fault("internet_off")
         self.model.update_time(self.model.hours, self.model.minutes, self.model.seconds)    # TIC
         time.sleep(2)
@@ -261,6 +271,10 @@ class RemoteService(rpyc.Service):
         event_q.put([dispatcher.send, {"signal": signal_name, "sender": dispatcher.Any, "msg": msg}])
 
     @staticmethod
+    def exposed_execute_model_function(function):
+        AlarmModel.getInstance().alarm_function_call(function)
+
+    @staticmethod
     def exposed_set_alarm_state(state_name):  # this is an exposed method
         """ This method allows the alarm_remote to change the state of the AlarmModel. Again, this is rather unsafe;
         it should be modified to restrict what can actually be done.  For example, de-arming the AlarmModel should
@@ -320,7 +334,6 @@ class AlarmController():
             pass
 
         #create View  (MVC pattern)
-        LCDView()
         SMSView()
         EmailView()
         if self.model.alarm_config_dictionary["speaker"] == "enable":
@@ -329,10 +342,11 @@ class AlarmController():
             PiezoView()
             pass
 
+        for console_config in self.model.alarm_config_dictionary["consoles"]:
+            getattr(sys.modules[__name__], console_config["type"])(console_config)
+
         #create scanners (threads that periodically poll things)
         TimeScanner()
-        KeypadScanner()
-        #StdScanner(alarm_config_dictionary,self.model)
         WeatherScanner()
         NetworkMonitorScanner()
         AlarmRemote() #create the Thread that serves as a remote controller
@@ -351,58 +365,6 @@ class AlarmController():
     def handle_update_fault(self, msg):
         logger.warning("Alarm Fault. msg=" + msg)
         self.model.update_fault(msg)
-
-#####################################################################################
-class KeypadScanner(Thread, Testable):
-    """ This class will scan the keypad in its own thread """
-    #--------------------------------------------------------------------------------
-    def __init__(self):
-        """ Init the keypad scanner """
-        Thread.__init__(self)
-        Testable.__init__(self)
-
-        self.daemon = True
-        self.model = AlarmModel.getInstance()
-
-        try:
-            driver = self.model.alarm_config_dictionary["I2C_driver"]
-            logger.debug("I2C_driver: " + driver)
-        except:
-            logger.warning("KeypadScanner cannot be configured properly. ", exc_info=True)
-            return
-
-        if driver == "I2CLCD":
-            self.keypad = I2CLCD
-        elif driver == "I2CBV4618":
-            self.keypad = I2CBV4618
-        else:
-            raise Exception("I2C_driver (" + driver + ") not supported: " + driver)
-
-        self.start()    # start the thread
-
-    #--------------------------------------------------------------------------------
-    def run(self):
-        """ Run the keypad scanner """
-        logger.info("KeypadScanner started")
-        global lcd_init_required
-        while True:
-            self.not_undergoing_BIT.wait() #Wait if doing BIT
-            try:
-                key = self.keypad.getInstance().get_key()
-                if not key == '':
-                    self.model.keypad_input(key)
-
-                time.sleep(0.1)
-
-            except Exception, err:
-                #print sys.exc_info()[0]
-                logger.warning("Exception in KeypadScanner", exc_info=True)
-                #logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
-                time.sleep(10)
-
-    def do_BIT(self):
-        Testable.do_BIT(self)
-        assert self.isAlive()
 
 ###################################################################################
 class SoundPlayerView(Testable):
@@ -432,7 +394,7 @@ class SoundPlayerView(Testable):
         """subscribe to several topics of interest (model)"""
         dispatcher.connect(self.play_alarm_mode, signal="Alarm Mode Update Model",
                            sender=dispatcher.Any, weak=False)
-        dispatcher.connect(self.play_pin, signal="Input String Update Model",
+        dispatcher.connect(self.play_pin, signal="Button Pressed",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.play_grace_timer, signal="Grace Update Model",
                            sender=dispatcher.Any, weak=False)
@@ -486,7 +448,7 @@ class SoundPlayerView(Testable):
         Testable.do_BIT(self)
         logger.info("Playing all sound files.")
         for a_string in self.sound_config.values():
-            self.model.broadcast_message("Play: " + a_string)
+            self.model.broadcast_message("Play:" + a_string)
             subprocess.Popen(['aplay', '-q', self.script_path + a_string])
             time.sleep(1)
             subprocess.call("ps x | grep '[a]play_notes' | awk '{ print $1 }' | xargs kill", shell=True)
@@ -615,8 +577,9 @@ class BuzzPlayer(Thread):
         self.continuous_string = self.default_string
         self.play_notes(self.continuous_string)
 
-class LCDView(Testable):
-    def __init__(self):
+"""
+class LCDConsole(Testable):
+    def __init__(self, config):
         Testable.__init__(self)
         self.model = AlarmModel.getInstance()
 
@@ -625,20 +588,16 @@ class LCDView(Testable):
         except:
             logger.info("I2C_driver not found in configuration")
             return
-
-        if driver == "I2CLCD":
-            self.driver = I2CLCD
-        elif driver == "I2CBV4618":
-            self.driver = I2CBV4618
-        else:
-            raise Exception("I2C_driver (" + driver + ") not supported: " + driver)
-
+        try:
+            self.driver = globals()[driver](config["I2C_address"])
+        except:
+            logger.critical("I2C_driver (" + driver + ") not supported: " + driver)
+            return
         try:
             self.lcd_backlight_timer_setting = self.model.alarm_config_dictionary[
                 "lcd_backlight_timer"]    # Timer setting to deactivate backlight when LCD is inactive.
         except:
             self.lcd_backlight_timer_setting = 30
-
         try:
             self.lcd_custom_chars = self.model.alarm_config_dictionary["lcd_custom_chars"]
         except:
@@ -646,6 +605,9 @@ class LCDView(Testable):
 
         self.lcd_backlight_timer_enabled = not (self.lcd_backlight_timer_setting == 0)
         self.lcd_backlight_current_state = False
+
+        if config["keypad"]:
+            self.keypad = KeypadScanner(self, config[keypad_polling_period])
 
         #Display locations
         self.time_cursor_start = [1, 1]
@@ -665,9 +627,6 @@ class LCDView(Testable):
         self.current_arrow_dir = ""
         self.activity_timer_active = False
 
-        #This is not elegant.  This table works for both I2CLCD and I2CBV4618. It should be dynamic...
-
-
         self.LCD_template = ( '######################\n' +
                               '#                    #\n' +
                               '#                    #\n' +
@@ -675,7 +634,7 @@ class LCDView(Testable):
                               '#                    #\n' +
                               '######################\n')
 
-        """subscribe to several topics of interest (model)"""
+        #subscribe to several topics of interest (model)
         dispatcher.connect(self.update_weather, signal="Weather Update Model",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.update_time, signal="Time Update Model", sender=dispatcher.Any,
@@ -697,11 +656,7 @@ class LCDView(Testable):
         signal.signal(signal.SIGUSR1, self.update_ui_file)
         self.ui_file_path = os.path.dirname(os.path.abspath(__file__)) + "/"
 
-        # TODO: This table should be updated so that it is not hard coded...  Once the LCD
-        # is up and running, the table should be built using the lcd get_char()
-        self.table = string.maketrans(
-            chr(128) + chr(129) + chr(130) + chr(131) + chr(132) + chr(133) + chr(134) + chr(135) + chr(0) + chr(
-                1) + chr(2) + chr(3) + chr(4) + chr(5) + chr(6) + chr(7), "                ")
+        self.table = string.maketrans("","")
 
         global lcd_init_required
         lcd_init_required = True
@@ -715,7 +670,7 @@ class LCDView(Testable):
         lcd_init_required = False
 
         try:
-            self.lcd = self.driver.getInstance()
+            self.lcd = self.driver
             logger.debug("LCD initialization.")
             self.lcd.init()
             logger.debug("LCD init completed.")
@@ -723,20 +678,19 @@ class LCDView(Testable):
             logger.debug("LCD Changing custom chars...")
             self.current_arrow_dir = "SOUTH_WEST"
             self.lcd.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
+            string_from = self.get_char("arrow")
+            string_to = "a"
 
             for [index, data, symbol] in self.lcd_custom_chars:
                 if not index == 0:
                     self.lcd.change_custom_char(index, data, symbol)
-            #self.lcd.change_custom_char(2,[128,142,145,145,159,155,159,159],"locked")	#Currently not used
-            #self.lcd.change_custom_char(7,[128,142,144,144,159,155,159,159],"unlock") #Currently not used
+                string_from += self.get_char(symbol) # chr that needs to be translated
+                string_to += symbol[0]               # chr will be translated to the first character of the symbol name
+            self.table = string.maketrans(string_from, string_to)   # translation table for the ui file
             logger.debug("LCD custom chars completed.")
 
-            self.table = string.maketrans(
-                self.get_char("clock") + self.get_char("door") + self.get_char("patio") + self.get_char(
-                    "motion") + self.get_char("deg") + self.get_char("camera") + self.get_char("arrow"), "cDPMoCa")
-
-            self.lcd_backlight_current_state = False    #This will force a command to be sent to turn on (in set_backlight())
-
+            self.lcd_backlight_current_state = False    # This will force a command to be sent to
+                                                        # turn on (in set_backlight())
             logger.debug("LCD updating current display...")
             self.draw_sensors()
             self.update_weather("")
@@ -750,6 +704,10 @@ class LCDView(Testable):
         except IOError:
             logger.warning("Exception in LCDView init_screen")
             lcd_init_required = True
+
+    def change_screen(self, screen_type):
+        del self.current_screen
+        self.current_screen = screen_type(self)
 
     #-------------------------------------------------------------------
     def exit(self):
@@ -811,7 +769,7 @@ class LCDView(Testable):
 
     #-------------------------------------------------------------------
     def get_char(self, symbol):
-        temp = "?"
+        temp = '?'
         global lcd_init_required
         try:
             if not lcd_init_required:
@@ -896,16 +854,15 @@ class LCDView(Testable):
 
     #-------------------------------------------------------------------
     def update_pin(self, msg):
-        a_string = "              "
-        a_string = msg + a_string[len(msg):len(a_string)]
+        msg = msg[0:min(len(msg),14)]   # truncate the msg if it is too long
+        a_string = msg.ljust(14)    # pad with spaces
         self.send_to_lcd(self.pin_cursor_start, a_string)
         self.backlight_timer_reset()
 
     #-------------------------------------------------------------------
     def update_msg(self, msg):
-        a_string = "                 "
-        msg = msg[0:min(len(msg),17)]   # reduce the message if it is too long
-        a_string = msg + a_string[len(msg):len(a_string)]   # pad with spaces if required
+        msg = msg[0:min(len(msg),17)]   # truncate the msg if it is too long
+        a_string = msg.ljust(17)    # pad with spaces
         self.send_to_lcd(self.msg_cursor_start, a_string)
 
         self.message_fade_timer = self.msg_fade_timer_setting
@@ -959,7 +916,7 @@ class LCDView(Testable):
         status_str = status_str.rjust(6)
         logger.debug("LCDView changing state to: " + status_str)
         self.send_to_lcd(self.alarm_mode_cursor_start, status_str)
-        self.update_pin(self.model.input_string)
+        self.update_pin(self.model.display_string)
 
     #-------------------------------------------------------------------
     def wind_dir_arrow(self, wind_deg):
@@ -1009,15 +966,15 @@ class LCDView(Testable):
         # Test all arrows
         self.update_msg("Testing arrows")
         time.sleep(1)
-        arrow_chars = self.lcd.get_char("arrow")
+        arrow_chars = self.get_char("arrow")
         for dir in ["SOUTH","SOUTH_WEST","WEST","NORTH_WEST","NORTH","NORTH_EAST","EAST","SOUTH_EAST"]:
-            self.update_msg(dir)
+            self.update_msg(dir + " " + arrow_chars)
             self.wind_dir_arrow(dir)
             time.sleep(2)
         # Displaying custom chars on the LCD.
         custom_chars=""
         for [index, data, symbol] in self.lcd_custom_chars:
-            custom_chars += self.lcd.get_char(symbol)
+            custom_chars += self.get_char(symbol)
         self.update_msg(custom_chars)
         time.sleep(5)
 
@@ -1026,6 +983,713 @@ class LCDView(Testable):
         self.update_weather("")
         self.update_time()
         self.update_alarm_mode()
+"""
+
+#####################################################################################
+class KeypadScanner(Thread, Testable):
+    """ This class will scan the keypad in its own thread """
+    #--------------------------------------------------------------------------------
+    def __init__(self, console, driver, config):
+        """ Init the keypad scanner """
+        Thread.__init__(self)
+        Testable.__init__(self)
+
+        self.daemon = True
+        self.model = AlarmModel.getInstance()
+        self.console = console
+        self.keypad = driver
+        self.config = config
+
+        try:
+            self.period = self.config["keypad_polling_period"] / 1000.0
+            logger.debug("I2C_driver: " + str(self.period))
+        except:
+            logger.warning("KeypadScanner cannot be configured properly. ", exc_info=True)
+            return
+
+        self.start()    # start the thread
+
+    #--------------------------------------------------------------------------------
+    def run(self):
+        """ Run the keypad scanner """
+        logger.info("KeypadScanner started")
+        global lcd_init_required
+        while True:
+            self.not_undergoing_BIT.wait() #Wait if doing BIT
+            try:
+                key = self.keypad.get_key()
+                if not key == '':
+                    event_q.put([dispatcher.send,
+                                {"signal": "Button Pressed", "sender": dispatcher.Any,
+                                 "msg": key}])
+                    self.console.keypad_input(key)
+
+                time.sleep(self.period)
+
+            except Exception, err:
+                #print sys.exc_info()[0]
+                logger.warning("Exception in KeypadScanner", exc_info=True)
+                #logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
+                time.sleep(5)
+
+    def do_BIT(self):
+        Testable.do_BIT(self)
+        assert self.isAlive()
+
+class LCDConsole(Testable):
+    def __init__(self,config):
+        Testable.__init__(self)
+        self.model = AlarmModel.getInstance()
+        self.config = config
+
+        try:
+            driver = self.config["I2C_driver"]
+        except:
+            logger.info("I2C_driver not found in configuration")
+            return
+
+        try:
+            self.driver = globals()[driver](config["I2C_address"])
+        except:
+            logger.critical("I2C_driver (" + driver + ") not supported: " + driver, exc_info=True)
+            return
+        try:
+            self.lcd_backlight_timer_setting = self.config[
+                "lcd_backlight_timer"]    # Timer setting to deactivate backlight when LCD is inactive.
+        except:
+            self.lcd_backlight_timer_setting = 30
+        try:
+            self.lcd_custom_chars = self.model.alarm_config_dictionary["lcd_custom_chars"]
+        except:
+            logger.warning("Problem loading lcd_custom_chars", exc_info=True)
+
+        self.lcd_backlight_timer_enabled = not (self.lcd_backlight_timer_setting == 0)
+        self.lcd_backlight_current_state = False
+
+        if config["keypad"]:
+            self.keypad = KeypadScanner(self, self.driver, self.config)
+
+        self.current_arrow_dir = ""
+        self.table = string.maketrans("","")
+        self.reset_ui_file_template()   # This ensures the template is created
+
+
+        self.current_screen = DefaultScreen(self)
+        self.current_screen.activate()
+        global lcd_init_required
+        lcd_init_required = True
+        self.init_screen()
+
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+
+        logger.info("LCDView created")
+
+    #-------------------------------------------------------------------
+    def init_screen(self):
+        global lcd_init_required
+        logger.debug("Starting LCDView initialization")
+        lcd_init_required = False
+
+        try:
+            logger.debug("LCD initialization.")
+            self.driver.init()
+            logger.debug("LCD init completed.")
+
+            logger.debug("LCD Changing custom chars...")
+            self.current_arrow_dir = "SOUTH_WEST"
+            self.driver.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
+            string_from = self.get_char("arrow")
+            string_to = "a"
+
+            for [index, data, symbol] in self.lcd_custom_chars:
+                if not index == 0:
+                    self.driver.change_custom_char(index, data, symbol)
+                string_from += self.get_char(symbol) # chr that needs to be translated
+                string_to += symbol[0]               # chr will be translated to the first character of the symbol name
+            self.table = string.maketrans(string_from, string_to)   # translation table for the ui file
+            logger.debug("LCD custom chars completed.")
+
+            self.lcd_backlight_current_state = False    # This will force a command to be sent to
+                                                        # turn on (in set_backlight())
+            logger.info("LCD initialized")
+
+            self.current_screen.update_screen() # Redraw the current screen.
+
+        except IOError:
+            logger.warning("Exception in LCDView init_screen")
+            lcd_init_required = True
+
+    def keypad_input(self, key):
+        self.current_screen.keypad_input(key)
+
+    def change_screen(self, screen_type):
+        logger.debug(self.current_screen.__class__.__name__ + " changing to " + screen_type.__name__)
+        self.current_screen.deactivate()
+        self.reset_ui_file_template()
+
+        self.current_screen = screen_type(self)
+        self.current_screen.activate()
+        self.current_screen.update_screen()
+
+    #-------------------------------------------------------------------
+    def exit(self):
+        del self.current_screen
+
+    #-------------------------------------------------------------------
+    def reset_ui_file_template(self):
+        self.LCD_template = ( '######################\n' +
+                              '#                    #\n' +
+                              '#                    #\n' +
+                              '#                    #\n' +
+                              '#                    #\n' +
+                              '######################\n')
+
+    #-------------------------------------------------------------------
+    def update_ui_file_template(self, loc, s):
+        [row, col] = loc
+        temp_s = string.translate(s, self.table)
+
+        start_char = 23 * row + col
+        end_char = start_char + len(temp_s)
+
+        self.LCD_template = self.LCD_template[:start_char] + temp_s + self.LCD_template[end_char:]
+
+    def clr_scrn(self):
+        self.reset_ui_file_template()
+        global lcd_init_required
+        try:
+            if not lcd_init_required:
+                self.driver.clr_scrn()
+        except (IOError):
+            logger.warning("Exception in LCDView clr_scrn")
+            lcd_init_required = True
+
+    #-------------------------------------------------------------------
+    def send_to_lcd(self, loc, s):
+        #self.update_ui_file_template(loc, s)    #update the shadow copy of the lcd
+        [row, col] = loc
+        global lcd_init_required
+        try:
+            if lcd_init_required:
+                self.init_screen()
+            if not lcd_init_required:
+                self.driver.print_str(s, row, col)
+        except (IOError):
+            logger.warning("Exception in LCDView send_to_lcd")
+            lcd_init_required = True
+
+    #-------------------------------------------------------------------
+    def get_char(self, symbol):
+        temp = "?"
+        global lcd_init_required
+        try:
+            if not lcd_init_required:
+                temp = self.driver.get_char(symbol)
+        except (IOError, AttributeError):
+            logger.warning("Exception in LCDView get_char")
+            lcd_init_required = True
+        return temp
+
+    #-------------------------------------------------------------------
+    def set_backlight(self, on):
+        global lcd_init_required
+        try:
+            if not lcd_init_required:
+                if not (self.lcd_backlight_current_state == on):
+                    logger.debug("LCDView changing backlight to: " + str(on))
+                    self.driver.set_backlight(on)
+                    self.lcd_backlight_current_state = on
+        except (IOError, AttributeError):
+            logger.warning("Exception in LCDView set_backlight")
+            lcd_init_required = True
+
+    #-------------------------------------------------------------------
+    def wind_dir_arrow(self, wind_deg):
+        try:
+            if not (self.current_arrow_dir == wind_deg):
+                if wind_deg == "SOUTH_WEST":
+                    self.driver.change_custom_char(0, [128, 129, 146, 148, 152, 158, 128, 128], "arrow")
+                elif wind_deg == "WEST":
+                    self.driver.change_custom_char(0, [128, 132, 136, 159, 136, 132, 128, 128], "arrow")
+                elif wind_deg == "NORTH_WEST":
+                    self.driver.change_custom_char(0, [128, 158, 152, 148, 146, 129, 128, 128], "arrow")
+                elif wind_deg == "NORTH":
+                    self.driver.change_custom_char(0, [128, 132, 142, 149, 132, 132, 128, 128], "arrow")
+                elif wind_deg == "NORTH_EAST":
+                    self.driver.change_custom_char(0, [128, 143, 131, 133, 137, 144, 128, 128], "arrow")
+                elif wind_deg == "EAST":
+                    self.driver.change_custom_char(0, [128, 132, 130, 159, 130, 132, 128, 128], "arrow")
+                elif wind_deg == "SOUTH_EAST":
+                    self.driver.change_custom_char(0, [128, 144, 137, 133, 131, 143, 128, 128], "arrow")
+                else: #SOUTH
+                    self.driver.change_custom_char(0, [128, 132, 132, 149, 142, 132, 128, 128], "arrow")
+                self.current_arrow_dir = wind_deg
+        except:
+            logger.warning("Exception in LCDView wind_dir_arrow")
+            pass
+
+    def do_BIT(self):
+        Testable.do_BIT(self)
+
+        self.lcd.change_screen(DefaultScreen)
+        self.current_screen.do_BIT()
+
+class DefaultScreen():
+    def __init__(self,lcd):
+        self.lcd = lcd  # LCDView instance
+        self.model = AlarmModel.getInstance()
+        try:
+            # Timer setting to deactivate backlight when LCD is inactive.
+            self.lcd_backlight_timer_setting = \
+                self.model.alarm_config_dictionary["lcd_backlight_timer"]
+        except:
+            self.lcd_backlight_timer_setting = 30
+
+        #Display locations
+        self.time_cursor_start = [1, 1]
+        self.weather_cursor_start = [1, 11]
+        self.pin_cursor_start = [2, 1]
+        self.msg_cursor_start = [3, 1]
+        self.alarm_mode_cursor_start = [2, 15]
+        self.grace_timer_cursor_start = [3, 18]
+        self.sensor_cursor_start = [4, 1]
+        self.fault_cursor_start = [4, 19]
+
+        #Settings
+        self.message_fade_timer = -1
+        self.msg_fade_timer_setting = 5                            #Timer setting to remove a message after it is displayed.
+        self.lcd_backlight_timer_enabled = not (self.lcd_backlight_timer_setting == 0)
+        self.lcd_backlight_timer = self.lcd_backlight_timer_setting        #Timer to deactivate backlight when LCD is inactive.
+        self.fault_char = " "
+        self.activity_timer_active = False
+
+    def activate(self):
+        # Subscribe to signals.
+        dispatcher.connect(self.update_weather, signal="Weather Update Model",
+                           sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_time, signal="Time Update Model", sender=dispatcher.Any,
+                           weak=False)
+        dispatcher.connect(self.update_alarm_mode, signal="Alarm Mode Update Model",
+                           sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_fault, signal="Fault Update Model", sender=dispatcher.Any,
+                           weak=False)
+        dispatcher.connect(self.update_pin, signal="Input String Update Model",
+                           sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_msg, signal="Alarm Message", sender=dispatcher.Any,
+                           weak=False)
+        dispatcher.connect(self.update_sensor_state, signal="Sensor Update Model",
+                           sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_grace_timer, signal="Grace Update Model",
+                           sender=dispatcher.Any, weak=False)
+
+    def update_screen(self):
+        logger.debug("DefaultScreen updating current display...")
+        self.lcd.clr_scrn()
+        self.update_all_sensors()
+        self.update_weather("")
+        self.update_time()
+        self.update_alarm_mode()
+        self.update_msg("")
+        logger.debug("Current screen updated.")
+
+    def keypad_input(self,key):
+        if key == "*" and self.model.input_string == "1":
+            self.model.keypad_input("#")
+            #self.lcd.change_screen(WeatherScreen)
+            self.lcd.change_screen(MainMenuScreen)
+        else:
+            self.model.keypad_input(key)
+
+    def deactivate(self):
+        dispatcher.disconnect(self.update_weather, signal="Weather Update Model",
+                              sender=dispatcher.Any, weak=False)
+        dispatcher.disconnect(self.update_time, signal="Time Update Model",
+                              sender=dispatcher.Any, weak=False)
+        dispatcher.disconnect(self.update_alarm_mode, signal="Alarm Mode Update Model",
+                              sender=dispatcher.Any,
+                              weak=False)
+        dispatcher.disconnect(self.update_fault, signal="Fault Update Model",
+                              sender=dispatcher.Any, weak=False)
+        dispatcher.disconnect(self.update_pin, signal="Input String Update Model",
+                              sender=dispatcher.Any,
+                              weak=False)
+        dispatcher.disconnect(self.update_msg, signal="Alarm Message", sender=dispatcher.Any,
+                              weak=False)
+        dispatcher.disconnect(self.update_sensor_state, signal="Sensor Update Model",
+                              sender=dispatcher.Any,
+                              weak=False)
+        dispatcher.disconnect(self.update_grace_timer, signal="Grace Update Model",
+                              sender=dispatcher.Any,
+                              weak=False)
+
+    #-------------------------------------------------------------------
+    def update_grace_timer(self, msg):
+        timer = self.model.grace_timer
+        if timer <= 0:
+            timer_string = "   "
+        else:
+            timer_string = self.lcd.get_char("clock") + "{:2}".format(timer)
+        self.lcd.send_to_lcd(self.grace_timer_cursor_start, timer_string)
+
+    #-------------------------------------------------------------------
+    def update_all_sensors(self):
+        for sensor in self.model.sensor_list:
+            self.update_sensor_state(sensor)
+
+    #-------------------------------------------------------------------
+    def update_sensor_state(self, msg):
+        sensor = msg
+        [row, col] = self.sensor_cursor_start
+        col = col + self.model.sensor_list.index(sensor)
+        #Displays the icon when it is unlocked
+        if sensor.is_locked():
+            sensor_string = " "
+        else:
+            if len(sensor.icon) == 1:
+                sensor_string = sensor.icon[0]
+            else:
+                sensor_string = self.lcd.get_char(sensor.icon)
+        self.lcd.send_to_lcd([row, col], str(sensor_string))
+
+    #-------------------------------------------------------------------
+    def update_weather(self, msg):
+        [temp, wind_dir, wind_kph] = [self.model.temp_c, self.model.wind_dir, self.model.wind_kph]
+        self.lcd.wind_dir_arrow(self.model.wind_dir)
+        #weather_string = "{:>3}".format(int(round(float(temp),0)))+chr(self.get_char("deg"))+ "C" +chr(self.get_char("arrow"))+"{:>2.0f}".format(wind_kph)+"kh"
+        weather_string = "{:>3}".format(int(round(float(temp), 0))) + self.lcd.get_char("deg") + "C" + \
+                         self.lcd.get_char("arrow") + "{:>2.0f}".format(wind_kph) + "kh"
+        #print("formed weather string in view" + weather_string)
+        self.lcd.send_to_lcd(self.weather_cursor_start, weather_string)
+
+    #-------------------------------------------------------------------
+    def update_time(self):
+        [h, m, s] = [self.model.hours, self.model.minutes, self.model.seconds]
+        time_string = "{:0>2}:{:0>2}".format(h, m) + " "
+        self.lcd.send_to_lcd(self.time_cursor_start, time_string)
+
+        #Remove the displayed message after the fade timer.
+        if self.message_fade_timer >= 0:
+            self.message_fade_timer -= 1
+        if self.message_fade_timer == 0:
+            self.update_msg("")
+
+        #blink if there is a fault
+        if not self.fault_char == "  ":
+            if s % 2 == 0:
+                self.lcd.send_to_lcd(self.fault_cursor_start, "  ")
+            else:
+                self.lcd.send_to_lcd(self.fault_cursor_start, self.fault_char)
+
+        self.backlight_timer_decrease()
+
+    #-------------------------------------------------------------------
+    def update_pin(self, msg):
+        msg = msg[0:min(len(msg),14)]   # truncate the msg if it is too long
+        a_string = msg.ljust(14)    # pad with spaces
+        self.lcd.send_to_lcd(self.pin_cursor_start, a_string)
+        self.backlight_timer_reset()
+
+    #-------------------------------------------------------------------
+    def update_msg(self, msg):
+        msg = msg[0:min(len(msg),17)]   # truncate the msg if it is too long
+        a_string = msg.ljust(17)    # pad with spaces
+        self.lcd.send_to_lcd(self.msg_cursor_start, a_string)
+
+        self.message_fade_timer = self.msg_fade_timer_setting
+
+    def update_fault(self, msg):
+        a_string = ""
+        if self.model.fault_power:
+            a_string += "!"
+        else:
+            a_string += " "
+
+        if self.model.fault_network:
+            a_string += "@"
+        else:
+            a_string += " "
+        self.fault_char = a_string
+
+        if a_string == "  ":    # This is to ensure the chars are erased from the LCD.
+            self.lcd.send_to_lcd(self.fault_cursor_start, "  ")
+
+    #-------------------------------------------------------------------
+    def update_alarm_mode(self):
+        alarm_mode = self.model.alarm_mode
+        if str(alarm_mode) == "StateArmed":
+            self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
+            status_str = "AWAY"
+        elif str(alarm_mode) == "StatePartiallyArmed":
+            self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
+            status_str = "STAY"
+        elif str(alarm_mode) == "StateDisarming":
+            self.backlight_timer_active(timer_active=False)
+            status_str = "DISARM"
+        elif str(alarm_mode) == "StateArming":
+            self.backlight_timer_active(timer_active=False)
+            status_str = "ARMING"
+        elif str(alarm_mode) == "StateIdle":
+            self.backlight_timer_active(timer_active=self.lcd_backlight_timer_enabled)
+            status_str = "IDLE"
+        elif str(alarm_mode) == "StateAlert":
+            self.backlight_timer_active(timer_active=False)
+            status_str = "ALERT"
+        elif str(alarm_mode) == "StateFire":
+            self.backlight_timer_active(timer_active=False)
+            status_str = "FIRE"
+        elif str(alarm_mode) == "StateBIT":
+            self.backlight_timer_active(timer_active=False)
+            status_str = "BIT"
+        else:
+            status_str = "ERROR"
+
+        status_str = status_str.rjust(6)
+        logger.debug("LCDView changing state to: " + status_str)
+        self.lcd.send_to_lcd(self.alarm_mode_cursor_start, status_str)
+        self.update_pin(self.model.display_string)
+
+
+    def backlight_timer_active(self, timer_active):
+        self.activity_timer_active = timer_active
+        if self.activity_timer_active:
+            self.backlight_timer_reset()
+
+    def backlight_timer_decrease(self):
+        if self.activity_timer_active:
+            if self.lcd_backlight_timer > -1:
+                self.lcd_backlight_timer -= 1
+            if self.lcd_backlight_timer == 0:
+                self.lcd.set_backlight(False)
+
+    def backlight_timer_reset(self):
+        if self.activity_timer_active:
+            self.lcd_backlight_timer = self.lcd_backlight_timer_setting
+        self.lcd.set_backlight(True)
+
+    def do_BIT(self):
+        # Test all arrows
+        self.update_msg("Testing arrows")
+        time.sleep(1)
+        arrow_chars = self.lcd.get_char("arrow")
+        for dir in ["SOUTH","SOUTH_WEST","WEST","NORTH_WEST","NORTH","NORTH_EAST","EAST","SOUTH_EAST"]:
+            self.update_msg(dir + " " + arrow_chars)
+            self.lcd.wind_dir_arrow(dir)
+            time.sleep(2)
+        # Displaying custom chars on the LCD.
+        custom_chars=""
+        for [index, data, symbol] in self.lcd.lcd_custom_chars:
+            custom_chars += self.lcd.get_char(symbol)
+        self.update_msg(custom_chars)
+        time.sleep(5)
+
+        # Redraw everything on the LCD.
+        self.update_screen()
+
+class MainMenuScreen():
+    #Menu     0:Rtn #:Nxt#
+    # 1. Default         #
+    # 2. Weather         #
+    # 3. Info            #
+    def __init__(self,lcd):
+        self.lcd = lcd  # LCDView instance
+        self.model = AlarmModel.getInstance()
+        self.ACTIVITY_TIMER_SETTING = 20
+
+        # This is defining the menu structure.
+        self.menu_list = OrderedDict([("Weather",[self.lcd.change_screen,{"screen_type":WeatherScreen}]),
+                                      ("Info",[self.lcd.change_screen,{"screen_type":InfoScreen}]),
+                                      ("System", OrderedDict([("Arm",[self.model.function_arm,{}]),
+                                                              ("Delayed p-arm",[self.model.function_delayed_partial_arm,{}]),
+                                                              ("Run full BIT",[self.model.function_built_in_test,{}]),
+                                                              ("Reboot",[self.model.function_reboot,{}])
+                                                            ]))])
+        self.active_item_stack = []             # Stack is empty when in root item.
+        self.current_dict = self.get_active_dict()
+        self.item_qty = len(self.current_dict)
+        self.start_index = 0                    # Integer representing the index of the first displayed key.
+
+
+    def activate(self):
+        dispatcher.connect(self.update_time, signal="Time Update Model", sender=dispatcher.Any,
+                           weak=False)
+
+    def deactivate(self):
+        dispatcher.disconnect(self.update_time, signal="Time Update Model", sender=dispatcher.Any,
+                           weak=False)
+
+    def get_active_dict(self):
+        if len(self.active_item_stack) == 0:
+            return self.menu_list
+        else:
+            current_dict = self.menu_list
+            for item in self.active_item_stack:     # Use the stack to traverse the menu structure
+                current_dict = current_dict[item]
+            return current_dict
+
+    def update_screen(self):
+        lines = ["".ljust(20),"".ljust(20),"".ljust(20),"".ljust(20)]
+
+        # Display the title on the first line (we use Menu or the last item on the stack.
+        if len(self.active_item_stack) == 0:
+            title = "Menu".ljust(8)
+        else:
+            title = self.active_item_stack[len(self.active_item_stack)-1].ljust(8)
+        lines[0] = title + " 0:Bk #:Next"
+
+        # useful variables for the next for loop.
+        self.current_dict = self.get_active_dict()
+        self.item_qty = len(self.current_dict)
+
+        # Get the keys (or menu items) from the current active dictionnary.
+        line_nb = 1
+        for i in range(self.start_index, min(self.item_qty, self.start_index+3)):
+            lines[line_nb] = (str(line_nb) + "." + self.current_dict.keys()[i]).ljust(20)
+            line_nb += 1
+
+        # Send the strings to the LCD.
+        for i in range(4):
+            logger.debug("Line " + str(i) + ": " + lines[i])
+            self.lcd.send_to_lcd([1+i, 1], lines[i])
+
+    def update_time(self):
+        pass
+
+    def keypad_input(self,key):
+        if key == '0':  # Back
+            if len(self.active_item_stack) == 0:
+                self.lcd.change_screen(DefaultScreen)    # Return to the default screen.
+            else:
+                self.active_item_stack.pop()
+                self.start_index = 0
+                self.update_screen()
+        elif key == '#':    # Next page
+            if self.item_qty > (self.start_index + 3):
+                self.start_index += 3
+            else:
+                self.start_index = 0
+            self.update_screen()
+        elif key == '*':
+            pass
+
+        else:
+            item_index = self.start_index + (int(key) - 1)
+
+            if item_index <= (self.item_qty-1):
+                key = self.current_dict.keys()[item_index]
+                value = self.current_dict[key]
+                if isinstance(value, OrderedDict):      # This is an item with a sub-menu.
+                    self.active_item_stack.append(key)
+                    self.start_index = 0
+                    self.update_screen()
+                else:                                   # We execute the item.
+                    [func, kwargs] = value
+                    if not func == self.lcd.change_screen:      # if the function is not a screen change
+                        self.lcd.change_screen(DefaultScreen)   # we return to the DefaultScreen before invoking.
+                    func(**kwargs)
+            else:
+                pass    # Key entered is not valid.  We just ignore.
+
+class WeatherScreen():
+    def __init__(self,lcd):
+        self.lcd = lcd  # LCDView instance
+        self.model = AlarmModel.getInstance()
+        self.ACTIVITY_TIMER_SETTING = 20
+
+    def activate(self):
+        self.current_page = 0
+        self.activity_timer = self.ACTIVITY_TIMER_SETTING
+
+        dispatcher.connect(self.update_screen, signal="Weather Update Model",
+                           sender=dispatcher.Any, weak=False)
+        dispatcher.connect(self.update_time, signal="Time Update Model", sender=dispatcher.Any,
+                           weak=False)
+
+    def deactivate(self):
+        dispatcher.disconnect(self.update_screen, signal="Weather Update Model",
+                           sender=dispatcher.Any, weak=False)
+        dispatcher.disconnect(self.update_time, signal="Time Update Model", sender=dispatcher.Any,
+                           weak=False)
+
+    def update_screen(self):
+        logger.debug("WeatherScreen updating current display...")
+        self.lcd.clr_scrn()
+        self.weather_periods = len(self.model.parsed_json_forecast["forecast"]["simpleforecast"]["forecastday"])
+
+        try:
+            lines = ["","","",""]
+            if self.current_page == 0:
+                lines[0] = "Current       1:Next"
+
+                lines[1] = self.model.parsed_json_weather["current_observation"]["weather"].center(20)
+
+                temp = self.model.parsed_json_weather["current_observation"]["temp_c"]
+                temp_feels = self.model.parsed_json_weather["current_observation"]["feelslike_c"]
+                lines[2] = str(temp) + "C feels " + str(temp_feels) + "C"
+
+                wind_kph = self.model.parsed_json_weather["current_observation"]["wind_kph"]
+                wind_dir = self.model.parsed_json_weather["current_observation"]["wind_dir"]
+                wind_gust_kph = self.model.parsed_json_weather["current_observation"]["wind_gust_kph"]
+
+                lines[3] = str(int(round(float(wind_kph), 0))) + "kh " + str(wind_dir) + " Max:" + str(int(round(float(wind_gust_kph), 0))) + "kh"
+
+            elif self.current_page >= 1:
+                simple_periods = self.model.parsed_json_forecast["forecast"]["simpleforecast"]["forecastday"]
+                a_period = simple_periods[self.current_page - 1]
+                period_title = a_period["date"]["weekday"]
+                temp_low = a_period["low"]["celsius"]
+                temp_high = a_period["high"]["celsius"]
+                period_condition = a_period["conditions"]
+                wind_kph = a_period["avewind"]["kph"]
+                wind_dir = a_period["avewind"]["dir"]
+                wind_gust_kph = a_period["maxwind"]["kph"]
+
+                lines[0] = period_title.ljust(13) + " 1:Next"
+                lines[1] = period_condition
+                lines[2] = "L: " + temp_low + self.lcd.get_char("deg") + "C H: " + temp_high + self.lcd.get_char("deg") + "C"
+                lines[3] = str(int(round(float(wind_kph), 0))) + "kh " + str(wind_dir) + " Max:" + str(int(round(float(wind_gust_kph), 0))) + "kh"
+
+        except:
+            logger.warning("Exception in WeatherScreen", exc_info=True)
+            lines[1] = "An error occurred."
+
+        for i in range(4):
+            logger.debug("Line " + str(i) + ": " + lines[i])
+            self.lcd.send_to_lcd([1+i, 1], lines[i])
+
+    def update_time(self):
+        self.activity_timer -= 1
+        if self.activity_timer <= 0:
+            self.lcd.change_screen(DefaultScreen)
+
+    def keypad_input(self,key):
+        self.activity_timer = self.ACTIVITY_TIMER_SETTING
+        if key == '1':
+            self.current_page = (self.current_page + 1) % (self.weather_periods + 1)
+            self.update_screen()
+        elif key == '#':
+            pass
+        else:
+            self.lcd.change_screen(DefaultScreen)
+
+class InfoScreen():
+    def __init__(self,lcd):
+        self.lcd = lcd  # LCDView instance
+        self.model = AlarmModel.getInstance()
+        self.ACTIVITY_TIMER_SETTING = 20
+
+    def update_screen(self):
+        self.model.time_started
+        current_time = time.time()
+
+    def __del__(self):
+        pass
+
+class BITScreen():
+    def __init__(self):
+        pass
+
+    def __del__(self):
+        pass
 
 #####################################################################################
 import tty, termios
@@ -1383,8 +2047,9 @@ class SMSSender(Thread):
         previous_title = event.title.text
         event.title.text = previous_title + " Updated"
 
-        #end_time = time.strftime("%Y-%m-%dT%H:%M:%S-05:00", time.localtime(time.time() + 2 * 60))
-        end_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()))
+        # TODO.  We need to find a more elegant way of doing this.  The event should be updated with the actual time
+        end_time = time.strftime("%Y-%m-%dT%H:%M:%S-05:00", time.localtime(time.time() + 2 * 60))
+        #end_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()))
 
         for a_when in event.when:
             logger.info("Event.when original: ")

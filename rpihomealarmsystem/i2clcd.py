@@ -37,7 +37,7 @@ Modified by Yann Moffett to meet common interface requirement with I2CBV4618.
 key_buffer = []
 
 
-class I2CLCD(Singleton):
+class I2CLCD():
     """
     Initializes the I2CLCD on I2C1.
         Note that if you are using this driver on the RPi A you will need to
@@ -63,7 +63,7 @@ class I2CLCD(Singleton):
                           '*': self.BUTTON_RELEASED,
                           '#': self.BUTTON_RELEASED}
 
-        self.init()
+        #self.init()
 
     def init(self):
         self.clr_scrn()
