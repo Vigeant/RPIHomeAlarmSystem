@@ -1072,8 +1072,6 @@ class LCDConsole(Testable):
         self.current_arrow_dir = ""
         self.table = string.maketrans("","")
         self.reset_ui_file_template()   # This ensures the template is created
-
-
         self.current_screen = DefaultScreen(self)
         self.current_screen.activate()
         global lcd_init_required

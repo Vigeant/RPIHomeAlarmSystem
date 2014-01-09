@@ -68,7 +68,7 @@ class I2CLCD():
     def init(self):
         self.clr_scrn()
         self.char_dict = {}
-
+        self.send_cmd([0x04])
         """
         self.CLOCK = 128 # clock char  ex.:lcd lcd.print_str(chr(CLOCK))
         self.DEG = 129 # deg symbol

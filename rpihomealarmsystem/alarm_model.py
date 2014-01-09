@@ -482,9 +482,10 @@ class AlarmModel(Singleton):
         self.alarm_config_dictionary = self.get_config()
 
         logger.debug("Loading AlarmModel grace timers")
-        self.arming_grace_time =  self.alarm_config_dictionary[
+        #print self.alarm_config_dictionary
+        self.arming_grace_time = self.alarm_config_dictionary[
             "arming grace delay"]  # this is the grace period for the system to arm
-        self.disarming_grace_time =  self.alarm_config_dictionary[
+        self.disarming_grace_time = self.alarm_config_dictionary[
             "disarming grace delay"]  # this is the grace period for the system to go into alert mode
         self.grace_timer = self.arming_grace_time
         self.fire_hush_setting = self.alarm_config_dictionary["fire_hush_setting"]

@@ -22,6 +22,7 @@ disarming grace delay: 30
 # delay (in minute) during which the fire detectors will be ignored by the system. "Hush" feature.
 # This feature is enabled by entering the PIN when in StateFire or by using the function.
 fire_hush_delay: 10
+fire_hush_setting: 1
 
 # pin. Code sequence to arm/de-arm the system. Number of digits is flexible.
 pin: "1234"
