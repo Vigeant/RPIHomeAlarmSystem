@@ -476,6 +476,8 @@ class AlarmModel(Singleton):
     alarm_mode = None
 
     def __init__(self):
+        self.transition_mutex = RLock()
+
         global logger
         logger = logging.getLogger('model')
 
@@ -633,10 +635,12 @@ class AlarmModel(Singleton):
 
     def alarm_function_call(self,function_string):
         function_string = "function_"+function_string
-        getattr(self, function_string)()
+        return getattr(self, function_string)()
 
     def alarm_state_machine(self, event_type, sensor=None):
-        self.alarm_mode.handle_event(event_type, sensor)
+        # Ensure no race condition while execution a transition of the state machine
+        with self.transition_mutex:
+            self.alarm_mode.handle_event(event_type, sensor)
 
     def set_grace_timer(self, t):
         self.grace_timer = t
@@ -747,37 +751,43 @@ class AlarmModel(Singleton):
     # Belongs to the StateIdle
     def function_arm(self):
         self.alarm_state_machine("PIN")
+        return 1
 
     # Belongs to the StateIdle
     def function_reboot(self):
         event_q.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
         logger.warning("----- Reboot code entered. -----")
+        return 1
 
     # Belongs to the StateIdle
     def function_partial_arm(self):
         self.alarm_state_machine("*")
+        return 1
+
+    def function_status(self):
+        return str(self)
 
     # Belongs to the StateIdle
     def function_delayed_partial_arm(self):
         pass
+        return 1
 
     # Belongs to all states.  Or maybe all but StateArmed and StateDisarming
     def function_fire_hush(self):
         pass
+        return 1
 
     # Belongs to the StateIdle
     def function_built_in_test(self):
         if isinstance(self.alarm_mode, StateIdle):
             BuiltInTest.getInstance().run_BIT()
+        return 1
 
     # Belongs to the StateIdle
     def function_LCD_BIT(self):
         if isinstance(self.alarm_mode, StateIdle):
             BuiltInTest.getInstance().run_component_BIT("LCDConsole")
-
-    # Belongs to all states.
-    def function_detailed_weather(self):
-        pass
+        return 1
 
 class AbstractState():
     """ This class is the default behaviour of a state.  As per the name, it is meant to be abstract and

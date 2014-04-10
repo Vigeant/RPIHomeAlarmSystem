@@ -8,8 +8,9 @@ GPIO
 packages required:
 python-gdata
 python-pip  
-"pip install PyDispatcher"
-"pip install rpyc"
+"sudo pip install PyDispatcher"
+"sudo pip install rpyc"
+"sudo pip install untangle
 
 Features
 
@@ -55,6 +56,7 @@ import RPi.GPIO as GPIO
 import atom
 import gdata.calendar
 import gdata.calendar.service
+import untangle    # sudo pip install untangle
 from pydispatch import dispatcher
 import rpyc
 #from alarm_model import AlarmModel
@@ -144,7 +146,8 @@ class WeatherScanner(Thread, Testable):
                     self.model.update_weather(temp, wind_dir, wind_kph)
                 except:
                     logger.warning("Exception in WeatherScanner", exc_info=True)
-
+            else:
+                logger.info("Weather check skipped.")
             time.sleep(600)
 
     def do_BIT(self):
@@ -182,6 +185,7 @@ class NetworkMonitorScanner(Thread, Testable):
                     msg = "internet_on"
                 else:
                     msg = "internet_off"
+                logger.info("NetworkMonitor status changed: " + msg)
                 self.model.update_fault(msg)
 
             if network_is_alive:
@@ -350,7 +354,7 @@ class AlarmController():
         WeatherScanner()
         NetworkMonitorScanner()
         AlarmRemote() #create the Thread that serves as a remote controller
-
+        GMailMonitor()
         logger.info("AlarmController started")
 
     #--------------------------------------------------------------------------------
@@ -1498,10 +1502,10 @@ class MainMenuScreen():
         # This is defining the menu structure.
         self.menu_list = OrderedDict([("Weather",[self.lcd.change_screen,{"screen_type":WeatherScreen}]),
                                       ("Info",[self.lcd.change_screen,{"screen_type":InfoScreen}]),
-                                      ("System", OrderedDict([("Arm",[self.model.function_arm,{}]),
-                                                              ("Delayed p-arm",[self.model.function_delayed_partial_arm,{}]),
-                                                              ("Run full BIT",[self.model.function_built_in_test,{}]),
-                                                              ("Reboot",[self.model.function_reboot,{}])
+                                      ("System", OrderedDict([("Arm",[self.model.alarm_function_call,{"function_string":"arm"}]),
+                                                              ("Delayed p-arm",[self.model.alarm_function_call,{"function_string":"delayed_partial_arm"}]),
+                                                              ("Run full BIT",[self.model.alarm_function_call,{"function_string":"built_in_test"}]),
+                                                              ("Reboot",[self.model.alarm_function_call,{"function_string":"reboot"}])
                                                             ]))])
         self.active_item_stack = []             # Stack is empty when in root item.
         self.current_dict = self.get_active_dict()
@@ -2136,7 +2140,7 @@ class EmailView(Testable):
         if not self.not_undergoing_BIT.is_set():
             subject = "BIT " + subject
         # Construct email
-        email_q.put([subject, message])
+        email_q.put({"subject": subject, "message": message})
 
     def do_BIT(self):
         Testable.do_BIT(self)
@@ -2163,32 +2167,115 @@ class EmailSender(Thread):
     def run(self):
         logger.info("EmailSender started")
         while (True):
-            [subj, message] = email_q.get()
+            kwargs = email_q.get()
             email_sent = False
             while (not email_sent):
                 if network_is_alive:
                     try:
-                        self.send_email(subj, message)
+                        self.send_email(**kwargs)
                         email_sent = True
-                        logger.info("An email was sent. Subject: " + subj + ", Message: " + message)
+                        logger.info("An email was sent. " + str(kwargs))
                     except:
-                        logger.warning("An exception occured while sending an email. ", exc_info=True)
+                        logger.warning("An exception occurred while sending an email. ", exc_info=True)
                     time.sleep(0.5)
                 else:
                     time.sleep(4)
 
-    def send_email(self, subj, message):
+    def send_email(self, subject, message, to=None):
         msg = MIMEText(message)
-        msg['To'] = ", ".join(self.addr_list)
+        to_list = self.addr_list
+        if not to == None:
+            to_list = [to]
+
+        msg['To'] = ", ".join(to_list)
         msg['From'] = self.smtp_user
-        msg['Subject'] = subj
+        msg['Subject'] = subject
         # Send the message via an SMTP server
         s = smtplib.SMTP(self.smtp_server + ':587')
         s.ehlo()
         s.starttls()
         s.login(self.smtp_user, self.smtp_pass)
-        s.sendmail(self.smtp_user, self.addr_list, msg.as_string())
+        s.sendmail(self.smtp_user, to_list, msg.as_string())
         s.quit()
+
+class GMailMonitor(Thread):
+    #------------------------------------------------------------------------------
+    def __init__(self):
+        Thread.__init__(self)
+        self.daemon = True
+        self.model = AlarmModel.getInstance()
+        alarm_config_dictionary = self.model.alarm_config_dictionary
+
+        self.FEED_URL = 'https://mail.google.com/mail/feed/atom'
+        try:
+            self.user_name = alarm_config_dictionary["google_username"]
+            self.password = alarm_config_dictionary["google_password"]
+            self.addr_list = alarm_config_dictionary["addr_list"]
+            self.start()
+        except:
+            logger.warning("EmailSender could not be started: ", exc_info=True)
+
+        self.last_processed_time = time.gmtime(time.time())
+
+    #-------------------------------------------------------------------
+    def run(self):
+        logger.info("GMail Monitor started")
+        while (True):
+            try:
+                self.parse_new_emails()
+            except:
+                logger.warning("An exception occurred in GMailMonitor. ", exc_info=True)
+            time.sleep(5)
+
+    #-------------------------------------------------------------------
+    def parse_new_emails(self):
+        xml = self.get_unread_msgs(self.user_name, self.password)
+        o = untangle.parse(xml)
+        try:
+           for e in o.feed.entry:
+                title = e.title.cdata
+                if title == "RPI Alarm":
+                    summary = e.summary.cdata
+                    date = time.strptime(e.issued.cdata, "%Y-%m-%dT%H:%M:%SZ")
+                    author = e.author.email.cdata
+                    if date > self.last_processed_time:
+                        logger.info("Received email: " +
+                                    "\tFrom = " + author +
+                                    "\tTitle = " + title +
+                                    "\tcontent = " + summary +
+                                    "\tdate = " + str(date) +
+                                    "\tlast date = " + str(self.last_processed_time))
+                        self.last_processed_time = date
+
+                        if author in self.addr_list:
+                            subject = "RPI Alarm Response"
+                            try:
+                                value = self.model.alarm_function_call(summary)
+                                message = summary + " call successful. Return value:\n"
+                                message += str(value)
+                            except:
+                                message = summary + " call failed"
+
+                            email_q.put({"subject": subject, "message": message, "to":author})
+
+        except IndexError:
+            pass    # no new mail
+
+        return None
+
+    # Returns unread emails in xml format.
+    def get_unread_msgs(self, user, passwd):
+        auth_handler = urllib2.HTTPBasicAuthHandler()
+        auth_handler.add_password(
+            realm='New mail feed',
+            uri='https://mail.google.com',
+            user=user,
+            passwd=passwd
+        )
+        opener = urllib2.build_opener(auth_handler)
+        urllib2.install_opener(opener)
+        feed = urllib2.urlopen(self.FEED_URL)
+        return feed.read()
 
 ###################################################################################		
 class GPIOView(Testable):
