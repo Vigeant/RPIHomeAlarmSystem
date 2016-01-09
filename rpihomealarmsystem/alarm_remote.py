@@ -3,7 +3,6 @@
 import sys, getopt
 import rpyc
 
-
 def main(argv):
     try:
         opts, args = getopt.getopt(argv, "hpe:m:s:f:", ["printAlarm", "event=", "msg=", "state=", "function="])
@@ -28,7 +27,7 @@ def main(argv):
             c.root.set_alarm_state(state)
         elif opt in ("-p", "--printAlarm"):
             c = rpyc.connect("localhost", 18861)
-            print c.root.get_model()
+            print str(c.root.get_model())
         elif opt in ("-f", "--function"):
             c = rpyc.connect("localhost", 18861)
             c.root.exposed_execute_model_function(arg)

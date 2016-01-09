@@ -15,7 +15,7 @@ class I2CBV4618():
         global logger
         logger = logging.getLogger('I2CBV4618')
         self.char_dict = {}
-        self.delay = 0.05
+        self.delay = 0.03
 
         self.mutex = RLock()
         self.bus = smbus.SMBus(1)

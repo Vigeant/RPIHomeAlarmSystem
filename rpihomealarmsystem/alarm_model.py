@@ -275,13 +275,16 @@ class AbstractSensor(Thread, Testable):
         self._current_reading = 1       #current valid sensor reading
         self._last_reading = 1          #previous valid sensor reading
 
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+        self.keep_alive = True
+
     def __str__(self):
         return self.__class__.__name__ + "(" + self.name + ", polling_period: " + str(self.polling_period) + ", locked: " + \
                str(self.is_locked()) + ", armed: " + str(self.is_armed()) + ", grace: " + str(self._disarming_grace)
 
     def run(self):
         logger.info("Started: " + str(self))
-        while (True):
+        while (self.keep_alive):
             self.not_undergoing_BIT.wait() #Wait if doing BIT
             self.execute()
             if self.has_changed():
@@ -297,6 +300,9 @@ class AbstractSensor(Thread, Testable):
                     logger.log(lvl,"Unlocked: " + str(self))
                 self.model.update_sensor(self)
             time.sleep(self.polling_period)
+
+    def exit(self):
+        self.keep_alive = False
 
     def _set_reading(self, reading):
         with self.sensor_mutex:
@@ -387,6 +393,8 @@ class Sensor(AbstractSensor):
                 temp_mode = GPIO.PUD_UP
             elif self.pin_mode == "PULLDOWN":
                 temp_mode = GPIO.PUD_DOWN
+            else:
+                assert False #invalid option
             GPIO.setup(int(self.pin), GPIO.IN, pull_up_down=temp_mode)
         except:
             logger.warning("Exception while setting a Sensor.", exc_info=True)
@@ -755,8 +763,8 @@ class AlarmModel(Singleton):
 
     # Belongs to the StateIdle
     def function_reboot(self):
-        event_q.put([dispatcher.send, {"signal": "Reboot", "sender": dispatcher.Any, }])
-        logger.warning("----- Reboot code entered. -----")
+        event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
+        logger.warning("----- Terminate Signal Sent. -----")
         return 1
 
     # Belongs to the StateIdle

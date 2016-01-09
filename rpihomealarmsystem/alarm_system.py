@@ -27,7 +27,6 @@ Features
 "Alarm Mode Update Model"
 "Grace Update Model"
 "Sensor Update Model"
-"Reboot"
 "Terminate"
 
 ********************************************************************************"""
@@ -77,15 +76,21 @@ class TimeScanner(Thread, Testable):
         Testable.__init__(self)
         self.daemon = True
         self.model = AlarmModel.getInstance()
+
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+        self.keep_alive = True
         self.start()
 
     #-------------------------------------------------------------------
     def run(self):
         logger.info("TimeScanner started")
-        while True:
+        while self.keep_alive:
             self.not_undergoing_BIT.wait() #Wait if doing BIT
             self.execute()
             time.sleep(1)
+
+    def exit(self):
+        self.keep_alive = False
 
     def execute(self):
         h = time.localtime().tm_hour
@@ -114,15 +119,18 @@ class WeatherScanner(Thread, Testable):
                    + "/geolookup/conditions/q/" + alarm_config_dictionary["wunderground location"] + ".json"
         self.forecast_url_string = 'http://api.wunderground.com/api/' + alarm_config_dictionary["wunderground api key"]\
                    + '/geolookup/forecast/q/' + alarm_config_dictionary["wunderground location"]+'.json'
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+        self.keep_alive = True
+
         self.start()
 
     def run(self):
         logger.info("WeatherScanner started")
-        while True:
+        while self.keep_alive:
             self.not_undergoing_BIT.wait() #Wait if doing BIT
             if network_is_alive:
+                logger.info("Checking Weather.")
                 try:
-                    logger.info("Checking Weather.")
                     # Weather Condition
                     weather_url = urllib2.urlopen(self.weather_url_string)
                     json_weather_string = weather_url.read()
@@ -150,6 +158,9 @@ class WeatherScanner(Thread, Testable):
                 logger.info("Weather check skipped.")
             time.sleep(600)
 
+    def exit(self):
+        self.keep_alive = False
+
     def do_BIT(self):
         Testable.do_BIT(self)
         assert self.isAlive()
@@ -167,7 +178,11 @@ class NetworkMonitorScanner(Thread, Testable):
         self.model = AlarmModel.getInstance()
         self.daemon = True
 
-        self.url = 'http://74.125.228.100'
+        self.url = 'http://www.google.ca'
+
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+        self.keep_alive = True
+
         self.start()
 
     #-------------------------------------------------------------------
@@ -175,7 +190,7 @@ class NetworkMonitorScanner(Thread, Testable):
         global network_is_alive
         network_is_alive = True
         logger.info("NetworkMonitor started")
-        while True:
+        while self.keep_alive:
             self.not_undergoing_BIT.wait()  # Wait if doing BIT
 
             is_alive = self.check_connectivity(self.url)
@@ -192,6 +207,9 @@ class NetworkMonitorScanner(Thread, Testable):
                 time.sleep(60)
             else:
                 time.sleep(20)
+
+    def exit(self):
+        self.keep_alive = False
 
     @staticmethod
     def check_connectivity(reference):
@@ -237,7 +255,7 @@ class AlarmRemote(Thread, Testable):
         logger.info("AlarmRemote started")
         from rpyc.utils.server import ThreadedServer
 
-        self.t = ThreadedServer(RemoteService, port=18861)
+        self.t = ThreadedServer(RemoteService, port=18861, protocol_config = {"allow_all_attrs" : True})
         self.t.start()
 
     def do_BIT(self):
@@ -260,11 +278,18 @@ class RemoteService(rpyc.Service):
 
     def on_connect(self):
         # code that runs when a connection is created
-        pass
+        self.remote_handler = None
+
+        self.dispatcher_handles = []
 
     def on_disconnect(self):
         # code that runs when the connection has already closed
-        pass
+        if not self.remote_handler == None:
+            logger.removeHandler(self.remote_handler)
+
+        #disconnect to the dispatcher as appropriate.
+        for [a_handle, a_signal] in self.dispatcher_handles:
+            dispatcher.disconnect(a_handle, a_signal, sender=dispatcher.Any, weak=False)
 
     @staticmethod
     def exposed_create_event(signal_name, msg):     # this is an exposed method
@@ -296,7 +321,25 @@ class RemoteService(rpyc.Service):
         """ This method simply returns an AlarmModel string containing its current state.
         """
         logger.debug("Received remote get_model().")
-        return str(AlarmModel.getInstance())
+        return AlarmModel.getInstance()
+
+    def exposed_connect_signal(self, a_handle, a_signal):
+        try:
+            dispatcher.connect(a_handle, signal=a_signal, sender=dispatcher.Any, weak=False)
+            self.dispatcher_handles.append([a_handle,a_signal])
+        except:
+            logger.warning("Could not connect to specified signal", exc_info=True)
+
+    def exposed_get_dispatcher(self):
+        return dispatcher
+
+    #TODO: NOT TESTED AT ALL
+    def exposed_add_remote_logger(self, remote_handler): # this is an exposed method
+        try:
+            logger.addHandler(remote_handler)
+            self.remote_handler = remote_handler
+        except:
+            logger.warning("Error while adding the handler. ")
 
 ###################################################################################
 class AlarmController():
@@ -307,7 +350,7 @@ class AlarmController():
     #------------------------------------------------------------------------------
     def __init__(self):
         #subscribe to several topics of interest (scanners)
-        dispatcher.connect(self.handle_reboot_request, signal="Reboot",
+        dispatcher.connect(self.exit, signal="Terminate",
                            sender=dispatcher.Any, weak=False)
         dispatcher.connect(self.handle_update_fault, signal="Fault Update", sender=dispatcher.Any,
                            weak=False) # This is required for the apcupsd support
@@ -338,7 +381,10 @@ class AlarmController():
             pass
 
         #create View  (MVC pattern)
-        SMSView()
+
+        # TODO: SMS view not instanciated since Google has changed the API.
+        #SMSView()
+
         EmailView()
         if self.model.alarm_config_dictionary["speaker"] == "enable":
             SoundPlayerView()
@@ -354,16 +400,15 @@ class AlarmController():
         WeatherScanner()
         NetworkMonitorScanner()
         AlarmRemote() #create the Thread that serves as a remote controller
-        GMailMonitor()
+        #GMailMonitor()
         logger.info("AlarmController started")
 
     #--------------------------------------------------------------------------------
     @staticmethod
-    def handle_reboot_request():
+    def exit():
         global terminate
         terminate = True
-        event_q.put([dispatcher.send, {"signal": "Terminate", "sender": dispatcher.Any, }])
-        logger.warning("----- Reboot code entered. -----")
+        logger.warning("----- Global Terminate Set -----")
 
     # This is required for the apcupsd faults.
     def handle_update_fault(self, msg):
@@ -484,7 +529,6 @@ class PiezoView():
         logger.info("PiezoView created")
 
     def exit(self):
-
         self.buzzer.stop()
 
     def sensor_change(self, msg):
@@ -1011,6 +1055,8 @@ class KeypadScanner(Thread, Testable):
             logger.warning("KeypadScanner cannot be configured properly. ", exc_info=True)
             return
 
+        dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+        self.keep_alive = True
         self.start()    # start the thread
 
     #--------------------------------------------------------------------------------
@@ -1018,7 +1064,7 @@ class KeypadScanner(Thread, Testable):
         """ Run the keypad scanner """
         logger.info("KeypadScanner started")
         global lcd_init_required
-        while True:
+        while self.keep_alive:
             self.not_undergoing_BIT.wait() #Wait if doing BIT
             try:
                 key = self.keypad.get_key()
@@ -1035,6 +1081,9 @@ class KeypadScanner(Thread, Testable):
                 logger.warning("Exception in KeypadScanner", exc_info=True)
                 #logger.warning("Exception in KeypadScanner")    #LCDView will take care of resetting the controller
                 time.sleep(5)
+
+    def exit(self):
+        self.keep_alive = False
 
     def do_BIT(self):
         Testable.do_BIT(self)
@@ -1137,7 +1186,11 @@ class LCDConsole(Testable):
 
     #-------------------------------------------------------------------
     def exit(self):
-        del self.current_screen
+        self.current_screen.deactivate()
+        self.clr_scrn()
+        self.send_to_lcd([1, 1], "Terminated.")
+        logger.info("LCD Terminated.")
+        #del self.current_screen
 
     #-------------------------------------------------------------------
     def reset_ui_file_template(self):
@@ -1235,7 +1288,7 @@ class LCDConsole(Testable):
     def do_BIT(self):
         Testable.do_BIT(self)
 
-        self.lcd.change_screen(DefaultScreen)
+        self.change_screen(DefaultScreen)
         self.current_screen.do_BIT()
 
 class DefaultScreen():
@@ -1704,21 +1757,25 @@ class StdScanner(Thread):
         """ Init the keyboard scanner """
         Thread.__init__(self)
         self.daemon = True
-
+        dispatcher.connect( self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+        self.keep_alive = True
         self.start()    # start the thread
 
     #--------------------------------------------------------------------------------
     def run(self):
         """ Run the keyboard scanner """
         logger.info("StdScanner started")
-        global terminate
-        while (not terminate):
+
+        while self.keep_alive:
             try:
                 key = self.get_key()
                 event_q.put([dispatcher.send,
                             {"signal": "Button Pressed", "sender": dispatcher.Any, "msg": key}])
             except IOError:
                 pass
+
+    def exit(self):
+        self.keep_alive = False
 
     #--------------------------------------------------------------------------------
     @staticmethod
@@ -1932,7 +1989,8 @@ class SMSView(Testable):
         
         # TODO.  We need to find a more elegant way of doing this.  The event should be created with the actual time
         # it happens...  This extra 60 second is to ensure the reminder is received.
-        start_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()+60))
+        #start_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()+60))
+        start_time = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time()+60))
 
         when = gdata.calendar.When(start_time=start_time, end_time=start_time)
         reminder = gdata.calendar.Reminder(minutes=1, extension_attributes={"method": "sms"})
@@ -1971,6 +2029,9 @@ class SMSSender(Thread):
                 logger.info("Problem with google_calendar in config file. Reverting to default calendar.")
                 self.calendar_string = "/calendar/feeds/default/private/full"
 
+            dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+            self.keep_alive = True
+
             self.start()
         except:
             logger.warning("SMSSender could not be started: ", exc_info=True)
@@ -1980,7 +2041,7 @@ class SMSSender(Thread):
     #-------------------------------------------------------------------
     def run(self):
         logger.info("SMSSender started")
-        while (True):
+        while self.keep_alive:
             [seq, an_event] = calendar_q.get()
             action_completed = False
             while (not action_completed):
@@ -2000,6 +2061,9 @@ class SMSSender(Thread):
                     time.sleep(.5)
                 else:
                     time.sleep(4)
+
+    def exit(self):
+        self.keep_alive = False
 
     def logon(self):
         self.cs = gdata.calendar.service.CalendarService()
@@ -2052,8 +2116,9 @@ class SMSSender(Thread):
         event.title.text = previous_title + " Updated"
 
         # TODO.  We need to find a more elegant way of doing this.  The event should be updated with the actual time
-        end_time = time.strftime("%Y-%m-%dT%H:%M:%S-05:00", time.localtime(time.time() + 2 * 60))
         #end_time = time.strftime("%Y-%m-%dT%H:%M:%S.000-05:00", time.localtime(time.time()))
+        #end_time = time.strftime("%Y-%m-%dT%H:%M:%S-05:00", time.localtime(time.time() + 2 * 60))
+        end_time = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 2 * 60))
 
         for a_when in event.when:
             logger.info("Event.when original: ")
@@ -2096,9 +2161,7 @@ class SMSSender(Thread):
             logger.warning("New link: " + link)
             time.sleep(5)
             return link
-
         return ""
-
 
 email_q = Queue()
 ###################################################################################
@@ -2159,6 +2222,10 @@ class EmailSender(Thread):
             self.smtp_user = alarm_config_dictionary["smtp_user"]
             self.smtp_pass = alarm_config_dictionary["smtp_pass"]
             self.addr_list = alarm_config_dictionary["addr_list"]
+
+            dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+            self.keep_alive = True
+
             self.start()
         except:
             logger.warning("EmailSender could not be started: ", exc_info=True)
@@ -2166,7 +2233,7 @@ class EmailSender(Thread):
     #-------------------------------------------------------------------
     def run(self):
         logger.info("EmailSender started")
-        while (True):
+        while (self.keep_alive):
             kwargs = email_q.get()
             email_sent = False
             while (not email_sent):
@@ -2181,6 +2248,9 @@ class EmailSender(Thread):
                 else:
                     time.sleep(4)
 
+    def exit(self):
+        self.keep_alive = False
+
     def send_email(self, subject, message, to=None):
         msg = MIMEText(message)
         to_list = self.addr_list
@@ -2191,8 +2261,8 @@ class EmailSender(Thread):
         msg['From'] = self.smtp_user
         msg['Subject'] = subject
         # Send the message via an SMTP server
-        s = smtplib.SMTP(self.smtp_server + ':587')
-        s.ehlo()
+        s = smtplib.SMTP(self.smtp_server, 587)
+        #s.ehlo()
         s.starttls()
         s.login(self.smtp_user, self.smtp_pass)
         s.sendmail(self.smtp_user, to_list, msg.as_string())
@@ -2211,6 +2281,10 @@ class GMailMonitor(Thread):
             self.user_name = alarm_config_dictionary["google_username"]
             self.password = alarm_config_dictionary["google_password"]
             self.addr_list = alarm_config_dictionary["addr_list"]
+
+            dispatcher.connect(self.exit, signal="Terminate", sender=dispatcher.Any, weak=False)
+            self.keep_alive = True
+
             self.start()
         except:
             logger.warning("EmailSender could not be started: ", exc_info=True)
@@ -2220,13 +2294,16 @@ class GMailMonitor(Thread):
     #-------------------------------------------------------------------
     def run(self):
         logger.info("GMail Monitor started")
-        while (True):
-            try:
-                self.parse_new_emails()
-            except:
-                logger.warning("An exception occurred in GMailMonitor. ", exc_info=True)
+        while (self.keep_alive):
+            if network_is_alive:
+                try:
+                    self.parse_new_emails()
+                except:
+                    logger.warning("An exception occurred in GMailMonitor. ", exc_info=True)
             time.sleep(5)
 
+    def exit(self):
+        self.keep_alive = False
     #-------------------------------------------------------------------
     def parse_new_emails(self):
         xml = self.get_unread_msgs(self.user_name, self.password)
@@ -2381,7 +2458,12 @@ if __name__ == "__main__":
     while threading.active_count() > 0 and not terminate:
         time.sleep(0.1)
 
-    time.sleep(2)
-    GPIO.cleanup()
+    time.sleep(5)
 
+    #TODO: There should really be a cleanup.  However, it creates problem because the threads are not properly terminated.
+    #GPIO.cleanup()
+
+    logger.info(
+        "------------------------------------------- Logger Stopped -------------------------------------------")
     subprocess.call("shutdown -r now", shell=True)
+
